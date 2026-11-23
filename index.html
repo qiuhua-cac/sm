@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#26a0fc">
+<title>bbOn · 预防性维护</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f2f4f7;color:#1a1a1a;font-size:15px}
+body{display:flex;flex-direction:column;overflow:hidden}
+
+/* ---------- 通用 ---------- */
+.btn{border:none;border-radius:10px;padding:12px 18px;font-size:15px;font-weight:500;cursor:pointer;
+  background:#26a0fc;color:#fff;transition:opacity .15s}
+.btn:active{opacity:.75}
+.btn.ghost{background:#fff;color:#26a0fc;border:1px solid #d5e6f7}
+.btn.gray{background:#eef1f5;color:#666}
+.btn.danger{background:#f24b4b}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.block{width:100%}
+.btn.sm{padding:8px 14px;font-size:13px;border-radius:8px}
+
+.card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.row{display:flex;align-items:center;gap:10px}
+.muted{color:#8a94a6;font-size:13px}
+.hide{display:none!important}
+
+/* ---------- 顶栏 ---------- */
+#topbar{background:#26a0fc;color:#fff;padding:14px 16px;display:flex;align-items:center;
+  gap:12px;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+#topbar h1{font-size:17px;font-weight:600;flex:1}
+#topbar .icon-btn{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px}
+#topbar .logout-btn{flex-shrink:0;padding:5px 12px;border:none;border-radius:14px;
+  background:rgba(255,255,255,.22);color:#fff;font-size:12.5px;line-height:1.4;
+  cursor:pointer;font-family:inherit;white-space:nowrap}
+#topbar .logout-btn:active{background:rgba(255,255,255,.35)}
+
+/* ---------- 内容区 ---------- */
+#main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px}
+#main.no-pad{padding:0}
+
+/* ---------- 登录 ---------- */
+#login-view{display:flex;flex-direction:column;justify-content:center;min-height:100%;padding:24px 20px;
+  background:linear-gradient(160deg,#26a0fc 0%,#7ec850 100%)}
+#login-view .brand{text-align:center;color:#fff;margin-bottom:32px}
+#login-view .brand .logo{font-size:40px;font-weight:700;letter-spacing:1px}
+#login-view .brand .sub{font-size:13px;opacity:.85;margin-top:6px}
+#login-view .form{background:#fff;border-radius:16px;padding:22px 18px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:13px;color:#5a6478;margin-bottom:6px;font-weight:500}
+.field input{width:100%;padding:12px 14px;border:1px solid #dfe4ec;border-radius:10px;font-size:15px;
+  background:#fafbfc;outline:none;transition:border-color .15s}
+.field input:focus{border-color:#26a0fc;background:#fff}
+.remember-row{display:flex;align-items:center;gap:7px;font-size:13px;color:#5a6478;
+  cursor:pointer;margin:2px 0 14px;user-select:none}
+.remember-row input[type=checkbox]{width:16px;height:16px;margin:0;accent-color:#26a0fc;cursor:pointer}
+
+/* ---------- 筛选标签 ---------- */
+#tabs{display:flex;gap:8px;overflow-x:auto;padding:10px 12px;background:#fff;
+  border-bottom:1px solid #eaeef4;flex-shrink:0}
+#tabs::-webkit-scrollbar{display:none}
+.tab{flex-shrink:0;padding:8px 16px;border-radius:18px;background:#f2f4f7;color:#5a6478;
+  font-size:14px;cursor:pointer;white-space:nowrap;transition:all .15s}
+.tab.active{background:#26a0fc;color:#fff;font-weight:500}
+
+/* ---------- 工单列表 ---------- */
+#list-view{padding-bottom:16px}
+.ticket{background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;transition:transform .1s}
+.ticket:active{transform:scale(.985)}
+.ticket .code{font-size:13px;color:#26a0fc;font-weight:600;margin-bottom:6px}
+.ticket .title{font-size:15px;font-weight:500;line-height:1.4;margin-bottom:8px;color:#1a1a1a}
+.ticket .meta{font-size:12px;color:#8a94a6;line-height:1.6}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;
+  background:#eef6ff;color:#1a7fd4;margin-right:6px}
+
+/* ---------- 底部操作栏 ---------- */
+#actionbar{display:flex;gap:10px;padding:12px;background:#fff;border-top:1px solid #eaeef4;flex-shrink:0}
+#actionbar .btn{flex:1;padding:13px 0}
+
+/* ---------- 筛选面板 ---------- */
+#filter-panel{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;
+  display:flex;align-items:flex-end;opacity:0;pointer-events:none;transition:opacity .2s}
+#filter-panel.show{opacity:1;pointer-events:auto}
+#filter-panel .sheet{background:#fff;width:100%;max-height:85vh;border-radius:18px 18px 0 0;
+  display:flex;flex-direction:column;transform:translateY(100%);transition:transform .25s}
+#filter-panel.show .sheet{transform:translateY(0)}
+.sheet-head{padding:16px;border-bottom:1px solid #f0f2f5;display:flex;align-items:center;
+  font-weight:600;font-size:16px}
+.sheet-head .x{margin-left:auto;font-size:22px;color:#98a2b3;cursor:pointer;line-height:1}
+.sheet-body{flex:1;overflow-y:auto;padding:16px}
+.sheet-foot{display:flex;gap:10px;padding:12px 16px;border-top:1px solid #f0f2f5}
+.sheet-foot .btn{flex:1}
+
+/* 时间选择 */
+.time-row{display:flex;gap:8px;align-items:center;margin-bottom:14px}
+.time-row .tin{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;
+  padding:8px 10px;border:1px solid #dfe4ec;border-radius:9px;background:#fafbfc}
+.time-row .tin:focus-within{border-color:#26a0fc;background:#fff}
+.time-row .tin .tlbl{font-size:10.5px;color:#9aa4b4;line-height:1.2}
+.time-row .tin input{width:100%;border:none;background:none;outline:none;
+  font-size:12.5px;color:#1a1a1a;padding:0;font-variant-numeric:tabular-nums;
+  font-family:inherit;text-align:center}
+.time-row .sep{color:#c3cad6;flex-shrink:0;font-size:13px;padding-top:8px}
+
+/* 快捷按钮 */
+.quick{display:flex;gap:10px;margin:12px 0 4px}
+.quick .btn{flex:1;padding:11px 0;font-size:14px;border-radius:9px;font-weight:500}
+.quick .btn.day{background:#18b566}
+.quick .btn.night{background:#2979ff}
+
+/* ---------- 详情页 ---------- */
+#detail-view{padding-bottom:16px}
+.section{background:#fff;border-radius:12px;margin-bottom:12px;overflow:hidden}
+.section-title{padding:10px 14px;font-weight:600;font-size:14px;border-bottom:1px solid #f0f2f5;
+  background:#fafbfc}
+.field-row{display:flex;padding:12px 16px;border-bottom:1px solid #f5f7fa;font-size:14px;line-height:1.5}
+.field-row:last-child{border-bottom:none}
+.field-row .k{color:#8a94a6;width:96px;flex-shrink:0}
+.field-row .v{flex:1;color:#1a1a1a;word-break:break-all}
+.field-row .v.empty{color:#c0c6d0}
+
+/* 工作措施项 */
+.measure-item{display:flex;align-items:center;padding:14px 16px;border-bottom:1px solid #f5f7fa;
+  cursor:pointer;gap:12px}
+.measure-item:active{background:#f7f9fc}
+.measure-item:last-child{border-bottom:none}
+.measure-item .idx{width:26px;height:26px;border-radius:50%;background:#eef6ff;color:#1a7fd4;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0}
+.measure-item .txt{flex:1;font-size:14px;line-height:1.4}
+.measure-item .st{font-size:12px;padding:3px 8px;border-radius:4px;flex-shrink:0}
+.st.done{background:#e8f8ee;color:#18a058}
+.st.todo{background:#fff4e6;color:#e08a1e}
+.measure-item .scan-icon{font-size:18px;color:#26a0fc;flex-shrink:0}
+
+/* ---------- 提示 ---------- */
+
+/* ---------- 详情页 ---------- */
+.frow{display:flex;align-items:center;padding:9px 14px;border-bottom:1px solid #f2f5f9;gap:8px;min-height:44px}
+.frow:last-child{border-bottom:none}
+.flabel{width:92px;flex-shrink:0;color:#5a6478;font-size:13px;line-height:1.3}
+.flabel i{color:#e94b4b;font-style:normal;margin-right:2px}
+.fval{flex:1;font-size:13.5px;color:#1a1a1a;word-break:break-all;line-height:1.3}
+.fval.empty{color:#c4cad4;padding:0!important;text-align:left!important}
+.fbtn{flex-shrink:0;padding:6px 12px;border:none;border-radius:6px;background:#f89b26;
+  color:#fff;font-size:12px;cursor:pointer}
+.fbtn:active{opacity:.75}
+
+.fedit{flex-shrink:0;padding:4px 10px;border-radius:6px;background:#eef4fb;
+  color:#1a7fd4;font-size:12px;cursor:pointer;line-height:1.4}
+.fedit:active{opacity:.7}
+.fswitch{flex-shrink:0;padding:5px 14px;border-radius:12px;background:#e6e9ee;
+  color:#8a94a6;font-size:12px;cursor:pointer;user-select:none}
+.fswitch.on{background:#e3f7ec;color:#18a058;font-weight:500}
+.finput{width:100%;padding:12px 14px;border:1px solid #dfe4ec;border-radius:10px;
+  font-size:15px;background:#fafbfc;outline:none}
+.finput:focus{border-color:#26a0fc;background:#fff}
+
+.flock{font-size:12px;opacity:.25;flex-shrink:0}
+.frow.readonly .fval{color:#5a6478}
+
+/* 紧凑行：责任人 / 工单开始时间 / 工单结束时间 */
+.frow.compact-row,.frow.time-row{padding:4px 14px!important;min-height:30px!important;gap:6px!important}
+.frow.compact-row .flabel,.frow.time-row .flabel{font-size:12.5px!important;line-height:1.2!important}
+.frow.compact-row .fval,.frow.time-row .fval{font-size:12.5px!important;line-height:1.2!important;font-variant-numeric:tabular-nums}
+.frow.compact-row .fedit{padding:3px 10px!important;font-size:11.5px!important;line-height:1.4!important}
+.frow.time-row .flock{font-size:11px;opacity:.2}
+.wtime{background:#f89b26!important}
+.opt-list{max-height:52vh;overflow:auto;border:1px solid #eef1f5;border-radius:10px}
+.opt-item{padding:13px 14px;border-bottom:1px solid #f2f5f9;display:flex;align-items:center;
+  gap:8px;font-size:14px;cursor:pointer}
+.opt-item:last-child{border-bottom:none}
+.opt-item:active{background:#f6f9fd}
+.opt-item.sel{background:#eef6ff;color:#1a7fd4;font-weight:500}
+.opt-item .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+
+/* 详情页顶部：工单代码 + 保存 */
+.detail-head{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  background:#fff;border-bottom:1px solid #eaeef4}
+.dh-code{flex:1;min-width:0}
+.dh-label{font-size:12px;color:#8a94a6;margin-bottom:4px}
+.dh-value{font-size:15px;font-weight:600;color:#1a1a1a;word-break:break-all}
+.dh-save{flex-shrink:0;padding:7px 18px;font-size:14px;border-radius:8px}
+
+/* 一键填充条 */
+.fillbar{padding:10px 14px 12px;border-top:1px solid #f2f5f9;text-align:center}
+.fill-btn{width:100%;background:#f89b26;padding:10px 0;font-size:14px;margin-bottom:6px}
+.fill-btn:active{opacity:.8}
+#wt-hint{font-size:11.5px;line-height:1.4}
+
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1200;
+  display:flex;align-items:center;justify-content:center;padding:24px}
+.modal-box{background:#fff;border-radius:14px;padding:20px;width:100%;max-width:320px}
+.modal-title{text-align:center;font-size:16px;font-weight:600;margin-bottom:16px}
+.modal-btns{display:flex;gap:10px}
+.modal-btns .btn{flex:1;padding:14px 0;line-height:1.4}
+.modal-btns .btn small{font-size:11px;opacity:.85}
+
+#toast{position:fixed;left:50%;top:42%;transform:translate(-50%,-50%);background:rgba(0,0,0,.8);
+  color:#fff;padding:12px 20px;border-radius:8px;font-size:14px;z-index:9999;
+  max-width:78%;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+
+#loading{position:fixed;inset:0;background:rgba(255,255,255,.85);z-index:500;
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+#loading .sp{width:36px;height:36px;border:3px solid #d5e6f7;border-top-color:#26a0fc;
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+#main .empty{text-align:center;padding:60px 20px;color:#b0b8c6}
+#main .empty .ic{font-size:48px;margin-bottom:12px;opacity:.4}
+</style>
+</head>
+<body>
+
+<!-- 顶栏 -->
+<div id="topbar" class="hide">
+  <button class="icon-btn hide" id="btn-back">‹</button>
+  <h1 id="top-title">预防性维护</h1>
+  <button class="logout-btn hide" id="btn-logout">退出账号</button>
+</div>
+
+<!-- 登录 -->
+<div id="login-view">
+  <div class="brand">
+    <div class="logo">bbOn</div>
+    <div class="sub">预防性维护 · 精简版</div>
+  </div>
+  <div class="form">
+    <div class="field hide">
+      <input id="inp-base" type="hidden" placeholder="https://xxx.com/api" autocomplete="url">
+      <div id="base-history" class="hide" style="margin-top:8px"></div>
+    </div>
+    <div class="field">
+      <label>账号</label>
+      <input id="inp-user" placeholder="邮箱 / 账号" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input id="inp-pass" type="password" placeholder="密码" autocomplete="current-password">
+    </div>
+    <label class="remember-row" for="chk-remember">
+      <input type="checkbox" id="chk-remember">
+      <span>记住密码</span>
+    </label>
+    <button class="btn block" id="btn-login" style="margin-top:8px">登 录</button>
+    <div class="muted" id="login-msg" style="margin-top:12px;text-align:center"></div>
+  </div>
+</div>
+
+<!-- 主视图 -->
+<div id="main" class="hide" ></div>
+
+<!-- 工单列表底部栏 -->
+<div id="actionbar" class="hide">
+  <button class="btn ghost" id="btn-filter">筛 选</button>
+  <button class="btn" id="btn-more">加载更多</button>
+</div>
+
+<!-- 筛选面板 -->
+<div id="filter-panel">
+  <div class="sheet">
+    <div class="sheet-head">筛选<span class="x" id="filter-close">×</span></div>
+    <div class="sheet-body">
+      <div class="fline">
+        <span class="fline-label">安排时间</span>
+      </div>
+      <div class="time-row">
+        <label class="tin">
+          <span class="tlbl">开始</span>
+          <input id="f-start" type="text" placeholder="2026-11-23 08:00:00" inputmode="numeric">
+        </label>
+        <span class="sep">→</span>
+        <label class="tin">
+          <span class="tlbl">结束</span>
+          <input id="f-end" type="text" placeholder="2026-11-23 20:00:00" inputmode="numeric">
+        </label>
+      </div>
+      <div class="quick">
+        <button class="btn day" id="q-day">白 班</button>
+        <button class="btn night" id="q-night">夜 班</button>
+      </div>
+      <div class="hint-edit">可点击输入框手动修改时间</div>
+      <div class="muted" id="q-hint" style="text-align:center"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn gray" id="filter-reset">重 置</button>
+      <button class="btn" id="filter-apply">确 定</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="loading" class="hide"><div class="sp"></div></div>
+
+<script src="app/api.js"></script>
+<script src="app/ui.js"></script>
+</body>
+</html>
