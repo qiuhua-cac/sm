@@ -956,60 +956,25 @@
    */
   async function scanMeasure(m) {
     if (!m) return;
+    const idx = S.mIdx;
+    loading(true);
+    try {
+      await API.saveMeasureState(
+        S.detailId, m.id, API.MEASURE_STATE.normal, S.paramDataId
+      );
+      m.state = API.MEASURE_STATE.normal;
+      m.stateName = '正常';
 
-    // 记下扫码时的索引，防止用户立刻滑走后刷错行
-    const myIdx = (S.measures || []).indexOf(m);
-
-    // 立刻点亮，不等服务器
-    m.state = API.MEASURE_STATE.normal;
-    m.stateName = '正常';
-    paintStateAt(myIdx);
-    paintListItem(m);
-
-    // 服务器同步在后台跑，不锁界面、不重绘
-    API.saveMeasureState(S.detailId, m.id, API.MEASURE_STATE.normal, S.paramDataId)
-      .catch(e => {
-        toast(e.message || '同步失败');
-        m.state = 0;
-        m.stateName = '未处理';
-        paintStateAt(myIdx);
-        paintListItem(m);
-      });
-  }
-
-  /**
-   * 只更新卡片上的状态文字（不重绘，滑动不被打断）
-   * 只有当前显示的就是这一行时才改，否则不动
-   */
-  function paintStateAt(idx) {
-    if (idx !== S.mIdx) return;           // 已经滑走了，不去碰当前卡片
-    const list = S.measures || [];
-    const m = list[idx];
-    const box = document.getElementById('ms-state');
-    if (!box || !m) return;
-    const ok = m.state === API.MEASURE_STATE.normal;
-    box.textContent = m.stateName || '未处理';
-    box.classList.toggle('ok', ok);
-  }
-
-  /** 更新详情页列表里那一条的状态 */
-  function paintListItem(m) {
-    const list = S.measures || [];
-    const i = list.indexOf(m);
-    if (i < 0) return;
-    const el = document.querySelector('.m-item[data-mi="' + i + '"]');
-    if (!el) return;
-    const ok = m.state === API.MEASURE_STATE.normal;
-    el.classList.toggle('ok', ok);
-    const st = el.querySelector('.m-state');
-    if (st) {
-      st.textContent = m.stateName || '未处理';
-      st.classList.toggle('ok', ok);
+      // 重新渲染卡片（保持当前索引）
+      S.mIdx = idx;
+      renderMeasureSheet();
+      renderMeasures(S.measures);
+      toast('✓ 扫码成功，已同步服务器');
+    } catch (e) {
+      toast(e.message || '扫码失败');
+    } finally {
+      loading(false);
     }
-    // 更新摘要
-    const done = list.filter(x => x.state === API.MEASURE_STATE.normal).length;
-    const sum = document.querySelector('.m-summary');
-    if (sum) sum.textContent = '共 ' + list.length + ' 项，已完成 ' + done + ' 项';
   }
 
   /* ==================== 筛选面板 ==================== */
