@@ -57,23 +57,10 @@
   /* ==================== 地址记忆 ==================== */
 
   // 固定服务器地址（永久写死，不再让用户填）
-  // 服务器地址：本地用代理，线上用 Cloudflare Worker 中转
-  // Workers 地址填进去即可（末尾不要带 /api，代码会自动补）
-  const WORKER_BASE = 'https://bluebee-proxy.qiuhua.workers.dev';
-
-  // 自动选择：
-  //   本地打开（localhost / 局域网 IP）→ 走本地代理 /api
-  //   线上打开（github.io 等）→ 走 Worker
-  const FIXED_BASE = (function () {
-    const h = location.hostname;
-    const isLocal = h === 'localhost' || h === '127.0.0.1' ||
-                    /^192\.168\./.test(h) || /^10\./.test(h) ||
-                    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
-                    location.protocol === 'file:';
-    if (isLocal) return location.origin + '/api';
-    if (WORKER_BASE) return WORKER_BASE.replace(/\/$/, '') + '/api';
-    return 'https://platform.bluebeecloud.com/api';
-  })();
+  // 服务器地址：始终用同域 /api
+  //   本地 → proxy.py 转发
+  //   线上 → Pages Function 转发（functions/api/[[path]].js）
+  const FIXED_BASE = location.origin + '/api';
   const ADDR_KEY = 'bbmini_addrs';
   const REMEMBER_KEY = 'bbmini_remember';
   const CRED_KEY = 'bbmini_cred';
