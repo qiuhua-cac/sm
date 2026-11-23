@@ -474,6 +474,12 @@
       <div class="muted" id="wt-hint">按安排时间：开始 +1~5 分钟，结束 +40~60 分钟</div>
     </div>`;
 
+    // ---------- 工作措施（紧跟一键填充）----------
+    html += `<div class="section measure-section">
+      <div class="section-title">工作措施</div>
+      <div id="measure-list"><div class="muted" style="padding:16px;text-align:center">加载中…</div></div>
+    </div>`;
+
     html += '</div>';
 
     // ---------- 其余字段只读 ----------
@@ -486,12 +492,6 @@
     SHOW.forEach(fid => { html += plainRow(fid); });
 
     html += '</div>';
-
-    // ---------- 工作措施 ----------
-    html += `<div class="section">
-      <div class="section-title">工作措施</div>
-      <div id="measure-list"><div class="muted" style="padding:16px;text-align:center">—</div></div>
-    </div>`;
 
     main.innerHTML = html;
 
@@ -828,183 +828,148 @@
     const box = $('measure-list');
     if (!box) return;
     try {
-      const list = await API.fetchDatagrid(dataId);
-      renderMeasures(box, list);
+      const list = await API.fetchMeasures(dataId, S.paramDataId);
+      S.measures = list;
+      renderMeasures(list);
     } catch (e) {
-      box.innerHTML = `<div class="muted" style="padding:16px">工作措施加载失败：${esc(e.message)}</div>`;
+      box.innerHTML = `<div class="muted" style="padding:16px;text-align:center">${esc(e.message)}</div>`;
     }
   }
 
-  function renderMeasures(box, list) {
+  /** 措施列表（详情页内） */
+  function renderMeasures(list) {
+    const box = $('measure-list');
+    if (!box) return;
+
     if (!list || !list.length) {
       box.innerHTML = '<div class="muted" style="padding:16px;text-align:center">暂无工作措施</div>';
       return;
     }
-    box.innerHTML = list.map((m, i) => {
-      const code = m.code || m.content_code || '';
-      const desc = m.description || m.name || m.desc || '';
-      return `<div class="measure-item" data-mi="${i}">
-        <div class="idx">${i + 1}</div>
-        <div class="txt">
-          <div>${esc(desc) || '(未命名)'}</div>
-          ${code ? `<div class="muted" style="font-size:11px">${esc(code)}</div>` : ''}
-        </div>
-        <div class="scan-icon">⌗</div>
-      </div>`;
-    }).join('');
 
-    box.querySelectorAll('.measure-item').forEach(el => {
-      el.onclick = () => doScan(list[Number(el.dataset.mi)]);
+    const done = list.filter(m => m.state === 143).length;
+    box.innerHTML = `<div class="m-summary">共 ${list.length} 项，已完成 ${done} 项</div>` +
+      list.map((m, i) => {
+        const ok = m.state === 143;
+        return `<div class="m-item ${ok ? 'ok' : ''}" data-mi="${i}">
+          <div class="m-idx">${i + 1}</div>
+          <div class="m-txt">
+            <div class="m-desc">${esc(m.desc) || '(未命名)'}</div>
+            <div class="m-code">${esc(m.code)}</div>
+          </div>
+          <div class="m-state ${ok ? 'ok' : ''}">${esc(m.stateName) || '未处理'}</div>
+        </div>`;
+      }).join('');
+
+    box.querySelectorAll('.m-item').forEach(el => {
+      el.onclick = () => openMeasureSheet(Number(el.dataset.mi));
     });
   }
 
-  /** 在详情里递归找工作措施数组 */
-  function findMeasures(obj, depth = 0) {
-    if (!obj || depth > 5) return [];
-    if (Array.isArray(obj)) {
-      // 判断是不是措施列表：元素有 name/label 且含 measure/措施 特征
-      if (obj.length && obj.every(x => x && typeof x === 'object' &&
-          (x.name !== undefined || x.label !== undefined || x.title !== undefined))) {
-        return obj;
-      }
-      for (const it of obj) {
-        const r = findMeasures(it, depth + 1);
-        if (r.length) return r;
-      }
-      return [];
-    }
-    if (typeof obj === 'object') {
-      for (const k of Object.keys(obj)) {
-        if (/measure|措施|measureList|action/i.test(k)) {
-          const v = obj[k];
-          if (Array.isArray(v) && v.length) return v;
-        }
-      }
-      for (const k of Object.keys(obj)) {
-        const v = obj[k];
-        if (v && typeof v === 'object') {
-          const r = findMeasures(v, depth + 1);
-          if (r.length) return r;
-        }
-      }
-    }
-    return [];
+  /* ============ 措施扫码（整屏卡片，左右滑动） ============ */
+
+  function openMeasureSheet(index) {
+    S.mIdx = index;
+    renderMeasureSheet();
   }
 
-  /* ==================== 扫码 ==================== */
+  function renderMeasureSheet() {
+    const list = S.measures || [];
+    if (!list.length) return;
+
+    let idx = S.mIdx;
+    if (idx < 0) idx = 0;
+    if (idx > list.length - 1) idx = list.length - 1;
+    S.mIdx = idx;
+
+    const m = list[idx];
+    const ok = m.state === 143;
+
+    let mask = document.getElementById('measure-sheet');
+    if (!mask) {
+      mask = document.createElement('div');
+      mask.id = 'measure-sheet';
+      mask.className = 'ms-mask';
+      document.body.appendChild(mask);
+    }
+    mask.style.display = 'flex';
+
+    mask.innerHTML = `<div class="ms-box">
+      <div class="ms-head">
+        <span class="ms-title">工作措施</span>
+        <span class="ms-count">${idx + 1} / ${list.length}</span>
+        <span class="ms-x" id="ms-close">×</span>
+      </div>
+
+      <div class="ms-body" id="ms-body">
+        <div class="ms-code">${esc(m.code)}</div>
+        <div class="ms-desc">${esc(m.desc)}</div>
+
+        <div class="ms-state-row">
+          <div class="ms-state-label">措施状态</div>
+          <div class="ms-state-val ${ok ? 'ok' : ''}" id="ms-state">${esc(m.stateName) || '未处理'}</div>
+        </div>
+
+        <button class="ms-btn-scan" id="ms-scan">一键扫码</button>
+
+        <div class="ms-hint">← 右滑上一条　　左滑下一条 →</div>
+      </div>
+    </div>`;
+
+    // 一键扫码
+    document.getElementById('ms-scan').onclick = () => scanMeasure(m);
+
+    document.getElementById('ms-close').onclick = closeMeasureSheet;
+
+    // 手势滑动
+    const body = document.getElementById('ms-body');
+    let sx = 0, sy = 0, tracking = false;
+    body.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
+    }, { passive: true });
+    body.addEventListener('touchend', e => {
+      if (!tracking) return;
+      tracking = false;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy)) return;
+      if (dx < 0) {
+        // 右→左：下一个
+        if (S.mIdx >= (S.measures || []).length - 1) return toast('已经是最后一个了');
+        S.mIdx += 1; renderMeasureSheet();
+      } else {
+        // 左→右：上一个
+        if (S.mIdx <= 0) return toast('已经是第一个了');
+        S.mIdx -= 1; renderMeasureSheet();
+      }
+    }, { passive: true });
+  }
+
+  function closeMeasureSheet() {
+    const m = document.getElementById('measure-sheet');
+    if (m) m.style.display = 'none';
+  }
 
   /**
-   * 扫码：优先用 getUserMedia 实时识别，
-   * 不支持则退回文件选择
+   * 一键扫码：状态置为「正常」并同步服务器
+   * 不限状态、不限工单是否已完成，可反复点
    */
-  async function doScan(measure) {
-    if (!measure) return;
-
-    const gridId = measure.data_grid_id || measure.datagrid_id || '';
-    const fkdId = measure.fkd_content_id || measure.id || '';
-
-    // 浏览器降级：文件选择 + 手动输入
-    const choice = await pickScanMode(measure);
-    if (!choice) return;
-
-    if (choice.mode === 'manual') {
-      const code = prompt('请输入二维码内容 / 编号：', '');
-      if (!code) return;
-      await verifyCode(code, gridId, fkdId, measure);
-      return;
-    }
-
-    // 拍照识别
-    const file = choice.file;
-    if (!file) return;
+  async function scanMeasure(m) {
+    if (!m) return;
+    const idx = S.mIdx;
     loading(true);
     try {
-      const code = await decodeQrFromFile(file);
-      if (!code) { toast('未能识别二维码，请重试或手动输入'); return; }
-      await verifyCode(code, gridId, fkdId, measure);
-    } finally {
-      loading(false);
-    }
-  }
+      await API.saveMeasureState(
+        S.detailId, m.id, API.MEASURE_STATE.normal, S.paramDataId
+      );
+      m.state = API.MEASURE_STATE.normal;
+      m.stateName = '正常';
 
-  function pickScanMode(measure) {
-    return new Promise(resolve => {
-      const mask = document.createElement('div');
-      mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;' +
-        'display:flex;align-items:flex-end';
-      const sheet = document.createElement('div');
-      sheet.style.cssText = 'background:#fff;width:100%;border-radius:16px 16px 0 0;padding:8px;';
-
-      const title = document.createElement('div');
-      title.textContent = measure.name || measure.label || '扫码';
-      title.style.cssText = 'padding:14px;text-align:center;font-size:13px;color:#8a94a6';
-      sheet.appendChild(title);
-
-      function mkBtn(text, cb) {
-        const b = document.createElement('div');
-        b.textContent = text;
-        b.style.cssText = 'padding:16px;text-align:center;font-size:16px;color:#26a0fc;' +
-          'border-top:1px solid #f0f2f5;cursor:pointer';
-        b.onclick = () => { mask.remove(); cb(); };
-        return b;
-      }
-
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'image/*';
-      fileInput.capture = 'environment';
-      fileInput.style.display = 'none';
-      fileInput.onchange = () => {
-        if (fileInput.files[0]) {
-          mask.remove();
-          resolve({ mode: 'file', file: fileInput.files[0] });
-        }
-      };
-      sheet.appendChild(fileInput);
-
-      sheet.appendChild(mkBtn('拍照扫描二维码', () => fileInput.click()));
-      sheet.appendChild(mkBtn('手动输入编号', () => resolve({ mode: 'manual' })));
-      sheet.appendChild(mkBtn('取消', () => resolve(null)));
-
-      mask.appendChild(sheet);
-      document.body.appendChild(mask);
-    });
-  }
-
-  /** 用 BarcodeDetector 解二维码；不支持返回 null */
-  async function decodeQrFromFile(file) {
-    if (!('BarcodeDetector' in window)) {
-      toast('浏览器不支持二维码识别，请手动输入');
-      return null;
-    }
-    try {
-      const bmp = await createImageBitmap(file);
-      const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-      const codes = await detector.detect(bmp);
-      return codes.length ? codes[0].rawValue : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  async function verifyCode(code, gridId, fkdId, measure) {
-    loading(true);
-    try {
-      const d = await API.scanCode({
-        contentId: API.state.contentId,
-        gridId,
-        fkdContentId: fkdId,
-        code
-      });
-      if (d.success) {
-        toast('✓ 扫码成功：' + code.slice(0, 20));
-        if (measure) {
-          measure.checked = true;
-          if (S.detail) renderDetail(S.detail, null);
-        }
-      } else {
-        toast(d.message || '校验失败');
-      }
+      // 重新渲染卡片（保持当前索引）
+      S.mIdx = idx;
+      renderMeasureSheet();
+      renderMeasures(S.measures);
+      toast('✓ 扫码成功，已同步服务器');
     } catch (e) {
       toast(e.message || '扫码失败');
     } finally {
