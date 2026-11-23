@@ -642,25 +642,99 @@ const API = (() => {
    * 拉取子表（工作措施等）
    * 找不到就返回空数组，不影响主流程
    */
-  async function fetchDatagrid(dataId, relationalContentId) {
-    if (!relationalContentId) return [];
-    try {
-      const d = await req('content/detail/datagrid-data-list', {
-        params: {
-          content_id: CFG.CONTENT_WO,
-          content_data_id: dataId,
-          relational_content_id: relationalContentId,
-          relational_data_id: dataId
-        }
-      });
-      const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
-      if (!ok) return [];
-      const data = d.data;
-      if (Array.isArray(data)) return data;
-      return data && data.data ? data.data : [];
-    } catch (e) {
-      return [];
-    }
+  /** 工作措施子表 content_id */
+  const GRID_MEASURE = 157;
+
+  /** 措施状态取值 */
+  const MEASURE_STATE = { normal: 143, standby: 144, error: 145, pending: 146 };
+  const MEASURE_STATE_NAME = { 143: '正常', 144: '备机', 145: '异常', 146: '未处理' };
+
+  /**
+   * 拉取工单的工作措施
+   * 返回 [{ id, code, desc, state, stateName, raw }]
+   */
+  async function fetchMeasures(dataId, paramDataId) {
+    const d = await req('content/detail/datagrid-data-list', {
+      params: {
+        content_id: CFG.CONTENT_WO,
+        content_data_id: dataId,
+        relational_content_id: GRID_MEASURE,
+        relational_data_id: dataId,
+        parameter_field_id: CFG.PARAM_FIELD,
+        parameter_data_id: paramDataId || 0,
+        workflow_field_id: CFG.FIELD_STATUS,
+        workflow_data_id: 70,
+        entity_field_id: 0,
+        entity_data_id: 0,
+        pagenum: 0,
+        pagesize: 200
+      }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '工作措施加载失败');
+
+    const rows = Array.isArray(d.data) ? d.data : ((d.data && d.data.data) || []);
+    return rows.map(r => {
+      const codeObj = r['327'] || {};
+      const descObj = r['328'] || {};
+      const st = r['940'];
+      // 940 可能是数字 id、"正常" 字符串，或 {id,name}
+      let stateId = 0, stateName = '';
+      if (typeof st === 'number') { stateId = st; stateName = MEASURE_STATE_NAME[st] || ''; }
+      else if (typeof st === 'string' && st) {
+        const found = Object.keys(MEASURE_STATE_NAME).find(k => MEASURE_STATE_NAME[k] === st);
+        stateId = found ? Number(found) : 0;
+        stateName = st;
+      } else if (st && typeof st === 'object') {
+        stateId = st.id || 0;
+        stateName = st.name || MEASURE_STATE_NAME[stateId] || '';
+      }
+      return {
+        id: r.id,
+        code: codeObj.name || '',
+        desc: descObj.name || '',
+        state: stateId,
+        stateName: stateName,
+        raw: r
+      };
+    });
+  }
+
+  /**
+   * 保存单条措施的状态
+   * @param {number} dataId    工单 id
+   * @param {number} rowId     措施行 id
+   * @param {number} stateId   143 正常 / 144 备机 / 145 异常 / 146 未处理
+   * @param {number} paramDataId
+   */
+  async function saveMeasureState(dataId, rowId, stateId, paramDataId) {
+    const d = await req('content/detail/datagrid-data', {
+      method: 'POST',
+      body: {
+        content_id: CFG.CONTENT_WO,
+        content_data_id: dataId,
+        relational_content_id: GRID_MEASURE,
+        relational_data_id: rowId,          // ★ 必须是措施行的 id，不是工单 id
+        parameter_field_id: CFG.PARAM_FIELD,
+        parameter_data_id: paramDataId || 0,
+        workflow_field_id: CFG.FIELD_STATUS,
+        workflow_data_id: 70,
+        entity_field_id: 0,
+        entity_data_id: 0,
+        values: [{
+          type: 'radioBox',
+          field_id: 940,
+          value: [stateId],
+          field_value: [stateId],
+          isUpdate: true,
+          is_delegate: false,
+          delegate_id: -1
+        }]
+      }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '保存失败');
+    return d;
   }
 
   /* ---------- 7. 扫码校验 ---------- */
@@ -742,7 +816,8 @@ const API = (() => {
     CFG, HEADLINE_FIELDS, WORKFLOW, USERS, fetchUsers, fetchWorkflowOptions, state, save, load, clear, req, normalizeBase, rsaEncrypt, fetchPublicKey,
     KNOWN_BASE,
     login, fetchMenu, fetchFilters, fetchList, fetchMultiFilter, fetchDetail, scanCode,
-    fetchFields, findPlanFieldId, saveDetail, fetchDatagrid, fetchFormFields,
+    fetchFields, findPlanFieldId, saveDetail, fetchMeasures, saveMeasureState,
+    MEASURE_STATE, MEASURE_STATE_NAME, GRID_MEASURE, fetchFormFields,
     buildShift,
     findPreventive
   };
