@@ -1,1159 +1,826 @@
 /**
- * ui.js —— 精简版交互逻辑
- * 只包含：登录 / 筛选标签 / 工单列表 / 白班夜班 / 详情 / 扫码
+ * api.js —— bluebee 接口封装
+ * 所有路径与参数均从 app-service.js 逆向确认
  */
 
-(() => {
-  const $ = (id) => document.getElementById(id);
+const API = (() => {
+  const KEY = 'bbmini_state';
 
-  const S = {
-    filters: [],
-    currentFilterId: 0,
-    page: 0,
-    pageSize: 10,
-    list: [],
-    total: 0,
-    loading: false,
-    shiftFilter: { fields: '', ops: '', values: '' },
-    detail: null,
-    detailId: null,
-    fieldIds: { plan: '' },
-    formFields: [],
-    paramDataId: 0
+  // 真实服务器（从授权二维码得到）
+  const REAL_BASE = 'https://platform.bluebeecloud.com/api';
+
+  // 浏览器端走本地代理避免 CORS：/api → 后端自动转发
+  const KNOWN_BASE = (typeof location !== 'undefined' &&
+                      /^https?:/.test(location.protocol))
+                     ? (location.origin + '/api')
+                     : REAL_BASE;
+
+  // content_id / parameter_id 常量
+  const CFG = {
+    CONTENT_WO: 108,      // 工单表
+    PARAM_PM: 2,          // 预防性维护
+    FILTER_IN_PROGRESS: 40,   // 进行中的工单
+    FILTER_OVERDUE: 48,       // 过期未完成的工单
+    FIELD_PLAN_TIME: 692,     // 安排时间
+    FIELD_CODE: 689,          // 工单代码
+    FIELD_DESC: 690,          // 工单描述
+    FIELD_STATUS: 704,        // 工单状态
+    PARAM_FIELD: 517,         // 参数字段（工单类型/工作类型）
+    PARAM_CONTENT: 341,       // 参数来源内容 id
   };
 
-  /* ==================== 通用 ==================== */
+  // 工单状态（从筛选配置 + App 截图推出）
+  // 只保留两个状态（按需求）
+  const WORKFLOW = [
+    { id: 70, name: '进行中 In Progress', color: '#F5D419' },
+    { id: 73, name: '已完成 Completed',   color: '#8BC34A' }
+  ];
 
-  function toast(msg, ms = 1800) {
-    const t = $('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    clearTimeout(t._timer);
-    t._timer = setTimeout(() => t.classList.remove('show'), ms);
-  }
+  // 不显示的人员（按要求隐藏）
+  const HIDDEN_USERS = ['刘方鹏', '周随民', '郑建宏', '熊忠伟', '祝晓欣', '刘恒'];
 
-  function loading(on) {
-    $('loading').classList.toggle('hide', !on);
-  }
+  // 责任人名单（content_id=92, field_id=592，与 App 下拉一致）
+  const USERS = [
+    { id: 5,  name: '郭旺城' },
+    { id: 6,  name: '曾杨崴' },
+    { id: 8,  name: '温易达' },
+    { id: 9,  name: '曾维东' },
+    { id: 10, name: '胡健威' },
+    { id: 11, name: '李宏俊' },
+    { id: 12, name: '陈中仪' },
+    { id: 13, name: '徐海航' },
+  ];
 
-  function showView(name) {
-    const main = $('main');
-    $('login-view').classList.toggle('hide', name !== 'login');
-    $('topbar').classList.toggle('hide', name === 'login');
-    main.classList.toggle('hide', name === 'login');
-    $('actionbar').classList.toggle('hide', name !== 'list');
-    $('btn-back').classList.toggle('hide', name !== 'detail');
-    $('btn-logout').classList.toggle('hide', name !== 'list');
-    $('top-title').textContent =
-      name === 'detail' ? '工单详情' : '预防性维护';
-  }
+  let _userCache = null;
 
-  function esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  /* ==================== 地址记忆 ==================== */
-
-  // 固定服务器地址（永久写死，不再让用户填）
-  // 服务器地址：始终用同域 /api
-  //   本地 → proxy.py 转发
-  //   线上 → Pages Function 转发（functions/api/[[path]].js）
-  const FIXED_BASE = location.origin + '/api';
-  const ADDR_KEY = 'bbmini_addrs';
-  const REMEMBER_KEY = 'bbmini_remember';
-  const CRED_KEY = 'bbmini_cred';
-
-  function getAddrs() {
-    try { return JSON.parse(localStorage.getItem(ADDR_KEY) || '[]'); }
-    catch (e) { return []; }
-  }
-
-  function saveAddr(addr) {
-    if (!addr) return;
-    let list = getAddrs().filter(x => x !== addr);
-    list.unshift(addr);
-    list = list.slice(0, 5);
-    try { localStorage.setItem(ADDR_KEY, JSON.stringify(list)); } catch (e) {}
-  }
-
-  /** 地址历史已隐藏，不再渲染 */
-  function renderAddrHistory() {
-    const box = $('base-history');
-    if (box) box.classList.add('hide');
-  }
-
-  /** 读取记住的账号密码 */
-  function loadCred() {
-    try {
-      const raw = localStorage.getItem(CRED_KEY);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (e) { return null; }
-  }
-
-  function saveCred(user, pass, remember) {
-    try {
-      if (remember) {
-        localStorage.setItem(REMEMBER_KEY, '1');
-        localStorage.setItem(CRED_KEY, JSON.stringify({ u: user, p: pass }));
-      } else {
-        localStorage.removeItem(REMEMBER_KEY);
-        localStorage.removeItem(CRED_KEY);
+  /** 拉取人员选项 */
+  async function fetchUsers(dataId, key) {
+    const d = await req('content/detail/headline-options', {
+      params: {
+        content_id: 92,
+        field_id: 592,
+        data_id: dataId,
+        key: key || ''
       }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) return USERS.slice();
+    const list = (d.data || [])
+      .filter(u => u && u.name && HIDDEN_USERS.indexOf(u.name) < 0)
+      .map(u => ({ id: Number(u.id), name: u.name }));
+    return list.length ? list : USERS.slice();
+  }
+
+  /**
+   * 拉取工单可切换的状态
+   * 服务器会按当前用户/工单权限返回可选项
+   */
+  async function fetchWorkflowOptions(dataId) {
+    // 只用「进行中 / 已完成」两项
+    return WORKFLOW.map(w => ({
+      id: w.id,
+      name: w.name,
+      color: w.color,
+      canNote: true
+    }));
+  }
+
+  /**
+   * 详情值的直接字段（headline-data 返回的 18 个）
+   * 这些 ID 与 display-field 的展示字段 ID 不同，直接按 ID 取
+   */
+  const HEADLINE_FIELDS = [
+    { field_id: 689, label: '工单代码',      type: 'text' },
+    { field_id: 704, label: '工单状态',      type: 'workflow', editable: true },
+    { field_id: 700, label: '设备代码',      type: 'entity' },
+    { field_id: 701, label: '设备描述',      type: 'entity' },
+    { field_id: 690, label: '工单描述',      type: 'text', editable: true },
+    { field_id: 702, label: '工单类型（主项）', type: 'entity' },
+    { field_id: 2530, label: '工作类型（小项）', type: 'entity' },
+    { field_id: 703, label: '工作分类',      type: 'entity' },
+    { field_id: 697, label: '优先级',        type: 'entity' },
+    { field_id: 2093, label: '负责岗位',      type: 'entity' },
+    { field_id: 692, label: '安排时间',      type: 'dateTime' },
+    { field_id: 693, label: '目标时间',      type: 'dateTime' },
+    { field_id: 2485, label: '是否需要职安健审批', type: 'switch' },
+    { field_id: 694, label: '工单开始时间',    type: 'dateTime', worktime: true },
+    { field_id: 695, label: '工单结束时间',    type: 'dateTime', worktime: true },
+    { field_id: 1558, label: '停机时间(h)',   type: 'decimal', editable: true },
+    { field_id: 705, label: '父工单代码',      type: 'select' },
+    { field_id: 1821, label: '工单说明',      type: 'textarea', editable: true },
+    { field_id: 2518, label: '备注',        type: 'textarea', editable: true },
+    { field_id: 2531, label: '责任人',        type: 'user', editable: true },
+    { field_id: 1559, label: '维修时间',      type: 'decimal', editable: true },
+    { field_id: 1560, label: '计划总工时',     type: 'decimal', editable: true },
+    { field_id: 699, label: '区域',        type: 'entity' },
+    { field_id: 698, label: '成本中心描述',    type: 'entity' },
+    { field_id: 688, label: '组织',        type: 'entity' },
+    { field_id: 2190, label: 'bluebee创建时间', type: 'dateTime' },
+  ];
+
+  const state = {
+    baseUrl: KNOWN_BASE,
+    token: '',
+    tokenId: '',
+    userName: '',
+    password: '',
+    email: '',
+    contentId: null,
+    parameterId: null,
+    menuRaw: null
+  };
+
+  /* ---------- 持久化 ---------- */
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY) || '{}');
+      Object.assign(state, s);
     } catch (e) {}
+    return state;
+  }
+  function clear() {
+    localStorage.removeItem(KEY);
+    state.token = ''; state.tokenId = ''; state.userName = '';
   }
 
-  function clearCred() {
-    try {
-      localStorage.removeItem(REMEMBER_KEY);
-      localStorage.removeItem(CRED_KEY);
-    } catch (e) {}
-  }
+  /* ---------- 请求 ---------- */
+  async function req(path, opts = {}) {
+    const { method = 'GET', params, body } = opts;
+    let url = state.baseUrl.replace(/\/$/, '') + '/' + path.replace(/^\//, '');
 
-  /* ==================== 登录 ==================== */
-
-  async function doLogin() {
-    const base = FIXED_BASE;
-    const user = $('inp-user').value.trim();
-    const pass = $('inp-pass').value;
-    const remember = $('chk-remember') ? $('chk-remember').checked : false;
-
-    if (!user || !pass) {
-      return toast('请填写账号和密码');
-    }
-
-    $('btn-login').disabled = true;
-    $('login-msg').textContent = '';
-    loading(true);
-
-    try {
-      await API.login(base, user, pass);
-      saveAddr(base);
-      saveCred(user, pass, remember);
-      toast('登录成功');
-      await bootAfterLogin();
-    } catch (e) {
-      $('login-msg').textContent = e.message || '登录失败';
-      toast(e.message || '登录失败');
-    } finally {
-      $('btn-login').disabled = false;
-      loading(false);
-    }
-  }
-
-  async function bootAfterLogin() {
-    loading(true);
-    try {
-      // 默认白班
-      const r0 = API.buildShift('day');
-      S.shiftFilter = {
-        fields: String(API.CFG.FIELD_PLAN_TIME),
-        ops: 'r',
-        values: r0.start + '|' + r0.end
-      };
-      // 直接用已知的 content_id / parameter_id
-      API.state.contentId = API.CFG.CONTENT_WO;
-      API.state.parameterId = API.CFG.PARAM_PM;
-      API.save();
-
-      await loadFilters();
-      showView('list');
-      await loadList(true);
-    } catch (e) {
-      $('login-msg').textContent = e.message || '加载失败';
-      toast(e.message || '加载失败');
-    } finally {
-      loading(false);
-    }
-  }
-
-  /* ==================== 字段发现 ==================== */
-
-  async function loadFieldIds() {
-    try {
-      const fields = await API.fetchFields();
-      const planId = API.findPlanFieldId(fields);
-      S.fieldIds.plan = planId;
-      console.log('[字段] 安排时间 field_id =', planId || '(未找到)', '共', fields.length, '个字段');
-      if (!planId) {
-        console.warn('[字段] 字段清单:', fields.map(f => (f.label || f.title || f.field_name)));
-      }
-    } catch (e) {
-      console.warn('获取字段定义失败:', e.message);
-    }
-  }
-
-  /* ==================== 筛选标签 ==================== */
-
-  async function loadFilters() {
-    // 直接用已知的标签（从服务器验证过）
-    S.filters = [
-      { id: API.CFG.FILTER_IN_PROGRESS, name: '进行中' },
-      { id: API.CFG.FILTER_OVERDUE,     name: '过期未完成' },
-      { id: 46,                          name: '已完成' }
-    ];
-    S.currentFilterId = API.CFG.FILTER_IN_PROGRESS;
-    renderTabs();
-  }
-
-  function renderTabs() {
-    let tabs = $('tabs');
-    if (!tabs) {
-      tabs = document.createElement('div');
-      tabs.id = 'tabs';
-      $('main').parentNode.insertBefore(tabs, $('main'));
-    }
-    tabs.innerHTML = S.filters.map(f =>
-      `<div class="tab ${S.currentFilterId === f.id ? 'active' : ''}"
-            data-id="${f.id}">${esc(f.name)}</div>`
-    ).join('');
-    tabs.classList.remove('hide');
-
-    tabs.querySelectorAll('.tab').forEach(el => {
-      el.onclick = async () => {
-        S.currentFilterId = Number(el.dataset.id);
-        tabs.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-        el.classList.add('active');
-        await loadList(true);
-      };
-    });
-  }
-
-  /* ==================== 工单列表 ==================== */
-
-  async function loadList(reset) {
-    if (S.loading) return;
-    S.loading = true;
-
-    if (reset) { S.page = 0; S.list = []; }
-
-    loading(true);
-    try {
-      const d = await API.fetchList({
-        filterId: S.currentFilterId,
-        page: S.page,
-        pageSize: S.pageSize,
-        fields: S.shiftFilter.fields,
-        ops: S.shiftFilter.ops,
-        values: S.shiftFilter.values
+    if (method === 'GET' && params) {
+      const qs = new URLSearchParams();
+      Object.keys(params).forEach(k => {
+        const v = params[k];
+        if (v !== undefined && v !== null && v !== '') qs.append(k, v);
       });
-
-      const items = d.list || [];
-      S.total = d.totalrecords || 0;
-      S.list = reset ? items : S.list.concat(items);
-      S.page += 1;
-      renderList();
-    } catch (e) {
-      toast(e.message || '加载失败');
-    } finally {
-      loading(false);
-      S.loading = false;
-    }
-  }
-
-  function renderList() {
-    const main = $('main');
-
-    if (!S.list.length) {
-      main.innerHTML = `<div class="empty">
-        <div class="ic">📋</div>
-        <div>没有工单</div>
-      </div>`;
-      $('btn-more').classList.add('hide');
-      return;
+      const s = qs.toString();
+      if (s) url += (url.includes('?') ? '&' : '?') + s;
     }
 
-    let html = '';
-    const F = API.CFG;
-    S.list.forEach((it, i) => {
-      const code  = it['content108$field' + F.FIELD_CODE] || '';
-      const desc  = it['content108$field' + F.FIELD_DESC] || '(无描述)';
-      const plan  = it['content108$field' + F.FIELD_PLAN_TIME] || '';
-      const wStart = it['content108$field694'] || '';
-      const wEnd   = it['content108$field695'] || '';
-      const st    = it['content108$field' + F.FIELD_STATUS];
-      const stName = (st && st.name) ? st.name : '';
-
-      // 班次标签
-      let shiftTag = '';
-      if (desc.indexOf('白班') >= 0) shiftTag = '白班';
-      else if (desc.indexOf('夜班') >= 0) shiftTag = '夜班';
-
-      // 负责人（责任人姓名，来自人员表 field592）
-      const owner = it['content108_content92$field592'] || '';
-
-      html += `<div class="ticket" data-idx="${i}">
-        <div class="code">${esc(code)}</div>
-        <div class="title">${esc(desc)}</div>
-        <div class="meta">
-          ${shiftTag ? `<span class="badge">${shiftTag}</span>` : ''}
-          <span class="badge badge-time">${esc(shiftRange(desc, plan))}</span>
-          ${stName ? `<span class="muted">${esc(stName)}</span>` : ''}
-        </div>
-        ${owner ? `<div class="owner-line"><span class="owner-ic">👤</span>${esc(owner)}</div>` : ''}
-      </div>`;
-    });
-
-    main.innerHTML = html;
-
-    main.querySelectorAll('.ticket').forEach(el => {
-      el.onclick = () => openDetail(S.list[Number(el.dataset.idx)]);
-    });
-
-    // 加载更多
-    $('btn-more').classList.toggle('hide', S.list.length >= S.total);
-  }
-
-  /* ==================== 详情 ==================== */
-
-  async function openDetail(item) {
-    if (!item) return;
-    const dataId = item.id || item.data_id;
-    S.detailId = dataId;
-
-    loading(true);
-    try {
-      // 并行拉：详情值 + 字段定义
-      const [values, defs] = await Promise.all([
-        API.fetchDetail(dataId),
-        S.formFields.length ? Promise.resolve(S.formFields) : API.fetchFormFields()
-      ]);
-      S.formFields = defs;
-      S.detail = values;
-      S.detailChanged = {};
-
-      // 记录 parameter_data_id（= 工单类型主项的 id，状态切换必需）
-      const pt = values.find(v => v.field_id === 702);
-      const pid = pt && pt.value && pt.value.id ? pt.value.id : 0;
-      S.paramDataId = pid || 2;
-
-      showView('detail');
-      renderDetail(values, defs);
-    } catch (e) {
-      toast(e.message || '加载详情失败');
-    } finally {
-      loading(false);
+    const headers = { 'Accept': 'application/json' };
+    if (state.token) {
+      headers['token'] = state.token;
+      headers['token-id'] = state.tokenId || '';
     }
-  }
+    let payload;
+    if (method !== 'GET' && body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      payload = JSON.stringify(body);
+    }
 
-  /** 时间字符串 → HH:mm */
-  function hm(v) {
-    if (!v) return '';
-    const str = String(v).replace('T', ' ');
-    const m = str.match(/\s(\d{2}):(\d{2})/);
-    if (m) return m[1] + ':' + m[2];
-    const m2 = str.match(/^(\d{2}):(\d{2})/);
-    if (m2) return m2[1] + ':' + m2[2];
-    return str;
-  }
+    const res = await fetch(url, { method, headers, body: payload });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch (e) { data = { success: false, message: text.slice(0, 200) }; }
 
-  /** 时间 → 整点 HH:00（用于列表显示） */
-  function hourOnly(v) {
-    if (!v) return '';
-    const str = String(v).replace('T', ' ');
-    const m = str.match(/(\d{2}):(\d{2})/);
-    return m ? m[1] + ':00' : '';
+    // bluebee 用 status 字段，success 可能不存在
+    if (data && data.status !== undefined && data.success === undefined) {
+      data.success = String(data.status).indexOf('10_000_') === 0;
+    }
+
+    // 401 / token 过期 → 自动重新登录再试一次
+    const isExpired = res.status === 401 ||
+      (data && (data.status === 401 ||
+                String(data.message || '').indexOf('token') >= 0 &&
+                String(data.message || '').indexOf('过期') >= 0));
+
+    if (isExpired && state.email && state.password && !opts._retried) {
+      await relogin();
+      return req(path, Object.assign({}, opts, { _retried: true }));
+    }
+
+    return data;
   }
 
   /**
-   * 列表卡片显示的时间段（固定 2 小时）
-   *   白班 → 07:00-08:30
-   *   夜班 → 19:00-20:30
+   * 把用户输入的地址规范成 {scheme}://{host}/api
+   * 支持输入：scan.bluebeecloud.com / https://scan.bluebeecloud.com/api 等
    */
-  function shiftRange(desc, dateSource) {
-    const d = String(desc || '');
-    let r = '';
-    if (d.indexOf('夜班') >= 0) r = '19:00-20:30';
-    else if (d.indexOf('白班') >= 0) r = '07:00-08:30';
-    if (!r) return '';
+  function normalizeBase(input) {
+    let u = String(input || '').trim();
+    if (!u) return KNOWN_BASE;
 
-    // 日期取自安排时间，格式 YYYY-MM-DD
-    const ds = String(dateSource || '');
-    const m = ds.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (m) return m[1] + ' ' + r;
-    return r;
-  }
-
-  /** 值 → 显示文本 */
-  function displayValue(v) {
-    if (v === null || v === undefined || v === '') return '';
-    if (typeof v === 'object') {
-      if (Array.isArray(v)) return v.length ? v.length + ' 项' : '';
-      if (v.name !== undefined && v.name !== null) return v.name;
-      if (v.dateTime) return v.dateTime;
-      return '';
+    // 官方域名 → 走本地代理，避免 CORS
+    if (/platform\.bluebeecloud\.com/i.test(u) &&
+        typeof location !== 'undefined' && /^https?:/.test(location.protocol)) {
+      return location.origin + '/api';
     }
-    if (typeof v === 'number') return String(v);
-    return String(v);
+    if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+    u = u.replace(/\/+$/, '');
+    if (!/\/api$/i.test(u)) u = u.replace(/\/bbservices\/.*$/, '') + '/api';
+    return u;
   }
 
-  /** 可编辑的字段类型 */
-  const EDITABLE = {
-    dateTime: 1, text: 1, textarea: 1, decimal: 1, number: 1
-  };
+  /* ---------- RSA 公钥加密 ---------- */
 
   /**
-   * 详情页布局（按需求）
-   * 顶部：工单代码 + [保存]
-   * 工单状态
-   * 负责人
-   * 工单开始时间 / 工单结束时间（一个「一键填充」按钮）
-   * 其余字段全部只读
+   * RSA 加密（Web Crypto，PKCS#1 v1.5）
+   * bluebee 的登录协议：email 和 password 都要加密
    */
-  function renderDetail(values, defs) {
-    const main = $('main');
+  /* ---------- 纯 JS RSA（PKCS#1 v1.5），不依赖 Web Crypto ---------- */
 
-    const valMap = {};
-    (values || []).forEach(v => { valMap[v.field_id] = v.value; });
-
-    const FIELDS = API.HEADLINE_FIELDS;
-    const byId = {};
-    FIELDS.forEach(f => { byId[f.field_id] = f; });
-
-    function val(fid) {
-      return displayValue(valMap[fid]);
-    }
-
-    function plainRow(fid, extra) {
-      const f = byId[fid] || { label: '', type: 'text' };
-      const v = val(fid);
-      return `<div class="frow readonly" data-row="${fid}">
-        <div class="flabel">${esc(f.label)}</div>
-        <div class="fval ${!v ? 'empty' : ''}" data-val="${fid}">${esc(v) || '—'}</div>
-        ${extra || '<span class="flock">🔒</span>'}
-      </div>`;
-    }
-
-    let html = '';
-
-    // ---------- 顶部：工单代码 + 保存 ----------
-    html += `<div class="detail-head">
-      <div class="dh-code">
-        <div class="dh-label">工单代码</div>
-        <div class="dh-value" data-val="689">${esc(val(689)) || '—'}</div>
-      </div>
-      <button class="btn dh-save" id="btn-save-detail">保 存</button>
-    </div>`;
-
-    // ---------- 可编辑区 ----------
-    html += '<div class="section">';
-
-    // 工单状态（可切换，选项从服务器拉）
-    html += `<div class="frow" data-row="704">
-      <div class="flabel">工单状态</div>
-      <div class="fval" data-val="704">${esc(val(704)) || '—'}</div>
-      <span class="fedit" data-wf="704">切换</span>
-    </div>`;
-
-    // 责任人
-    html += `<div class="frow compact-row" data-row="2531">
-      <div class="flabel">责任人</div>
-      <div class="fval ${val(2531) ? '' : 'empty'}" data-val="2531">${esc(val(2531)) || '—'}</div>
-      <span class="fedit" data-user="2531">选择</span>
-    </div>`;
-
-    // 工单开始时间
-    html += `<div class="frow time-row" data-row="694">
-      <div class="flabel">工单开始时间</div>
-      <div class="fval" data-val="694">${esc(val(694)) || '—'}</div>
-      <span class="flock">🔒</span>
-    </div>`;
-
-    // 工单结束时间
-    html += `<div class="frow time-row" data-row="695">
-      <div class="flabel">工单结束时间</div>
-      <div class="fval" data-val="695">${esc(val(695)) || '—'}</div>
-      <span class="flock">🔒</span>
-    </div>`;
-
-    // 一键填充（一个按钮）
-    html += `<div class="fillbar">
-      <button class="btn fill-btn" id="btn-fill-worktime">一键填充开始/结束时间</button>
-      <div class="muted" id="wt-hint">按安排时间：开始 +1~5 分钟，结束 +40~60 分钟</div>
-    </div>`;
-
-    // ---------- 工作措施（紧跟一键填充）----------
-    html += `<div class="section measure-section">
-      <div class="section-title">工作措施</div>
-      <div id="measure-list"><div class="muted" style="padding:16px;text-align:center">加载中…</div></div>
-    </div>`;
-
-    html += '</div>';
-
-    // ---------- 其余字段只读 ----------
-    html += '<div class="section">';
-    html += '<div class="section-title">工单信息</div>';
-
-    const SHOW = [690, 700, 701, 702, 2530, 703, 697, 2093,
-                  692, 693, 2485, 1558, 705, 1821, 2518,
-                  1559, 1560, 699, 698, 688, 2190];
-    SHOW.forEach(fid => { html += plainRow(fid); });
-
-    html += '</div>';
-
-    main.innerHTML = html;
-
-    // 事件
-    main.querySelectorAll('[data-wf]').forEach(b => {
-      b.onclick = () => pickWorkflow(Number(b.dataset.wf), b.closest('.frow'));
-    });
-    main.querySelectorAll('[data-user]').forEach(b => {
-      b.onclick = () => pickUser(Number(b.dataset.user), b.closest('.frow'));
-    });
-    $('btn-fill-worktime').onclick = fillWorkTime;
-    $('btn-save-detail').onclick = doSaveDetail;
-
-    loadMeasures(S.detailId);
+  /** base64 → Uint8Array */
+  function b64ToBytes(b64) {
+    const bin = atob(b64.replace(/[^A-Za-z0-9+/=]/g, ''));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  /** Uint8Array → base64 */
+  function bytesToB64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
   }
 
-  /* ============ 一键填充 工单开始/结束时间 ============ */
+  /** 从 PEM(SPKI) 里解析出 n 和 e（大整数用 BigInt） */
+  function parsePublicKey(pem) {
+    const b64 = pem.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
+    const der = b64ToBytes(b64);
 
-  /**
-   * 规则：
-   *   以「安排时间」为基准
-   *   开始 = 安排时间 + 1~5 分钟（随机）
-   *   结束 = 安排时间 + 40~60 分钟（随机）
-   */
-  /**
-   * 一键填充工单开始/结束时间
-   *
-   * 严格以「安排时间」为基准：
-   *   安排 13:00  →  开始 13:0X:XX，结束 13:XX:XX
-   *   日期、小时都跟安排时间完全一致，只有分钟秒数随机
-   *   开始：+1~5 分钟
-   *   结束：+40~60 分钟
-   *   若结束超过 23:59:59，则从安排时间往前回退（保持同样的相对偏移）
-   */
-  function fillWorkTime() {
-    const plan = S.detail.find(f => f.field_id === 692);
-    if (!plan || !plan.value) return toast('请先设置「安排时间」');
-
-    const baseStr = String(plan.value).replace('T', ' ');
-    const base = new Date(baseStr.replace(/-/g, '/'));
-    if (isNaN(base.getTime())) return toast('安排时间格式异常：' + baseStr);
-
-    const pad = n => ('0' + n).slice(-2);
-    const fmt = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-                     ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-
-    // 安排时间的小时/分钟（作为基准，不跨小时）
-    const baseH = base.getHours();
-    const baseM = base.getMinutes();
-
-    // 开始：安排分钟 + 1~5（若超过 59，保持在同一小时内会溢出，就直接用原分钟）
-    const startAdd = 1 + Math.floor(Math.random() * 5);        // 1..5
-    let sm = baseM + startAdd;
-    let sh = baseH;
-    if (sm > 59) { sm = 59; }                                   // 不跨到下一小时
-    const ss = Math.floor(Math.random() * 60);
-
-    // 结束：安排分钟 + 40~60
-    // 小时与安排时间保持同一小时（若加完超过 59 分，则限制在 59 分）
-    const endAdd = 40 + Math.floor(Math.random() * 21);        // 40..60
-    let em = baseM + endAdd;
-    let eh = baseH;
-    if (em > 59) { em = 59; }                                   // 锁在同一小时
-    const es = Math.floor(Math.random() * 60);
-
-    const st = new Date(base.getTime());
-    st.setHours(sh, sm, ss, 0);
-
-    const et = new Date(base.getTime());
-    et.setHours(eh, em, es, 0);
-
-    // 组装字符串（日期一律用安排时间的日期）
-    const dstr = base.getFullYear() + '-' + pad(base.getMonth() + 1) + '-' + pad(base.getDate());
-    const stStr = dstr + ' ' + pad(sh) + ':' + pad(sm) + ':' + pad(ss);
-    const etStr = dstr + ' ' + pad(eh) + ':' + pad(em) + ':' + pad(es);
-
-    setFieldValue(694, stStr);
-    setFieldValue(695, etStr);
-
-    const durMin = Math.round((et - st) / 60000);
-    $('wt-hint').textContent =
-      '按安排时间 ' + pad(baseH) + ':' + pad(baseM) +
-      ' → 开始 ' + pad(sh) + ':' + pad(sm) + ':' + pad(ss) +
-      '（+' + startAdd + '分） 结束 ' + pad(eh) + ':' + pad(em) + ':' + pad(es) +
-      '（+' + endAdd + '分，时长 ' + durMin + '分钟）';
-
-    toast('已填充工作时间');
-  }
-
-  /* ============ 工单状态选择 ============ */
-
-  /**
-   * 状态选择：只改界面，不提交
-   * 必须点「保存」才真正写服务器
-   */
-  async function pickWorkflow(fieldId, rowEl) {
-    loading(true);
-    let opts = [];
-    try {
-      opts = await API.fetchWorkflowOptions(S.detailId);
-    } catch (e) {} finally { loading(false); }
-
-    const cur = S.detail.find(f => f.field_id === fieldId);
-    const curId = cur && cur.value ? cur.value.id : null;
-
-    // 服务器只给了当前状态 → 用内置完整列表兜底
-    if (!opts.length || (opts.length === 1 && opts[0].id === curId)) {
-      opts = API.WORKFLOW.map(w => ({
-        id: w.id, name: w.name, color: w.color, canNote: true
-      }));
-    }
-
-    const mask = document.createElement('div');
-    mask.className = 'modal-mask';
-    mask.innerHTML = `<div class="modal-box">
-      <div class="modal-title">工单状态</div>
-      <div class="opt-list">
-        ${opts.map(w => `
-          <div class="opt-item ${w.id === curId ? 'sel' : ''}" data-id="${w.id}">
-            <span class="dot" style="background:${w.color}"></span>
-            <span class="nm">${esc(w.name)}</span>
-          </div>`).join('')}
-      </div>
-      <div class="muted" style="margin-top:10px;font-size:11.5px;text-align:center">
-        选好记得点顶部「保存」才会提交
-      </div>
-      <button class="btn gray" data-cancel style="margin-top:10px">取消</button>
-    </div>`;
-    document.body.appendChild(mask);
-
-    mask.querySelectorAll('.opt-item').forEach(el => {
-      el.onclick = () => {
-        const id = Number(el.dataset.id);
-        const w = opts.find(x => x.id === id);
-        const v = { id: id, name: w.name, color: w.color, note: '' };
-
-        // 只记在本地，等点保存才提交
-        S.detailChanged[fieldId] = v;
-        if (cur) cur.value = v;
-
-        const box = rowEl.querySelector('[data-val]');
-        box.textContent = w.name;
-        box.classList.remove('empty');
-        rowEl.classList.add('dirty');
-
-        toast('已选「' + w.name + '」，点保存提交');
-        mask.remove();
-      };
-    });
-    mask.querySelector('[data-cancel]').onclick = () => mask.remove();
-    mask.onclick = e => { if (e.target === mask) mask.remove(); };
-  }
-
-  /* ============ 负责人选择 ============ */
-
-  async function pickUser(fieldId, rowEl) {
-    loading(true);
-    let users = [];
-    try {
-      users = await API.fetchUsers(S.detailId);
-    } catch (e) {
-      // ignore
-    } finally {
-      loading(false);
-    }
-    if (!users.length) return toast('没有可选人员');
-
-    const cur = S.detail.find(f => f.field_id === fieldId);
-    const curId = cur && cur.value ? String(cur.value.id) : '';
-
-    const mask = document.createElement('div');
-    mask.className = 'modal-mask';
-    mask.innerHTML = `<div class="modal-box">
-      <div class="modal-title">责任人</div>
-      <input id="user-search" class="finput" placeholder="搜索姓名…" style="margin-bottom:10px">
-      <div class="opt-list" id="user-list">
-        ${users.map(u => `
-          <div class="opt-item ${String(u.id) === curId ? 'sel' : ''}" data-id="${u.id}" data-name="${esc(u.name)}">
-            ${esc(u.name)}
-          </div>`).join('')}
-      </div>
-      <button class="btn gray" data-cancel style="margin-top:12px">取消</button>
-    </div>`;
-    document.body.appendChild(mask);
-
-    // 搜索过滤
-    const inp = mask.querySelector('#user-search');
-    inp.oninput = () => {
-      const k = inp.value.trim().toLowerCase();
-      mask.querySelectorAll('.opt-item').forEach(el => {
-        const nm = el.dataset.name.toLowerCase();
-        el.style.display = (!k || nm.indexOf(k) >= 0) ? '' : 'none';
-      });
-    };
-
-    mask.querySelectorAll('.opt-item').forEach(el => {
-      el.onclick = () => {
-        const uid = Number(el.dataset.id);
-        const uname = el.dataset.name;
-        // 责任人字段(2531)存数字 id
-        S.detailChanged[fieldId] = uid;
-        if (cur) cur.value = { id: uid, name: uname };
-        const box = rowEl.querySelector('[data-val]');
-        box.textContent = uname;
-        box.classList.remove('empty');
-        toast('责任人 → ' + uname);
-        mask.remove();
-      };
-    });
-    mask.querySelector('[data-cancel]').onclick = () => mask.remove();
-    mask.onclick = e => { if (e.target === mask) mask.remove(); };
-  }
-
-  /* ============ 值显示与设置 ============ */
-
-  function displayValue(v) {
-    if (v === null || v === undefined || v === '') return '';
-    if (typeof v === 'object') {
-      if (Array.isArray(v)) return v.length ? v.length + ' 项' : '';
-      if (v.name !== undefined && v.name !== null) return v.name;
-      if (v.dateTime) return v.dateTime;
-      return '';
-    }
-    return String(v);
-  }
-
-  /** 设置单个字段值 */
-  function setFieldValue(fieldId, val) {
-    S.detailChanged[fieldId] = val;
-    const f = S.detail.find(x => x.field_id === fieldId);
-    if (f) f.value = val;
-
-    const v = document.querySelector('[data-val="' + fieldId + '"]');
-    if (!v) return;
-
-    const txt = displayValue(val);
-    v.textContent = txt || '—';
-    v.classList.toggle('empty', !txt);
-  }
-
-  /* ============ 保存 ============ */
-
-  async function doSaveDetail() {
-    const keys = Object.keys(S.detailChanged);
-    if (!keys.length) return toast('没有修改');
-
-    // 状态字段单独处理
-    const hasStatus = keys.indexOf('704') >= 0;
-    const wfTarget = S.detailChanged[704];
-    const wf = S.detail.find(f => f.field_id === 704);
-    const curWfId = wf && wf.value && wf.value.id ? wf.value.id : 70;
-
-    // 组装 values（去掉 704，合并到状态提交里）
-    const normalChanges = keys
-      .filter(k => k !== '704')
-      .map(fid => ({
-        field_id: Number(fid),
-        value: S.detailChanged[fid],
-        isUpdate: true
-      }));
-
-    // 参数：parameter_field_id=517, parameter_data_id=工单的工作类型id
-    const PARAM = {
-      parameter_field_id: API.CFG.PARAM_FIELD,
-      parameter_data_id: S.paramDataId || 3
-    };
-
-    loading(true);
-    let normalOk = true, statusOk = true, errMsg = '';
-
-    try {
-      // ----- 1. 普通字段 -----
-      if (normalChanges.length) {
-        try {
-          await API.saveDetail(S.detailId, normalChanges, Object.assign({
-            workflow_field_id: 704,
-            workflow_data_id: curWfId
-          }, PARAM));
-        } catch (e) {
-          normalOk = false;
-          errMsg = e.message || '保存失败';
-        }
+    // 极简 DER 解析：找 BIT STRING 里的 RSAPublicKey SEQUENCE
+    // SPKI: SEQ { SEQ { OID, NULL }, BIT STRING { SEQ { INTEGER n, INTEGER e } } }
+    let i = 0;
+    function readLen() {
+      let l = der[i++];
+      if (l & 0x80) {
+        const n = l & 0x7f;
+        l = 0;
+        for (let k = 0; k < n; k++) l = (l << 8) | der[i++];
       }
-
-      // ----- 2. 状态字段（和已填字段一起提交，满足必填约束）-----
-      if (hasStatus && wfTarget) {
-        try {
-          // 合并：已改动字段 + 状态
-          const all = normalChanges.concat([
-            { field_id: 704, value: wfTarget, isUpdate: true }
-          ]);
-          await API.saveDetail(S.detailId, all, Object.assign({
-            workflow_field_id: 704,
-            workflow_data_id: curWfId
-          }, PARAM));
-        } catch (e) {
-          statusOk = false;
-          if (!errMsg) errMsg = e.message || '';
-        }
-      }
-
-      // ----- 3. 结果 -----
-      if (normalOk && statusOk) {
-        toast('保存成功，已同步到服务器');
-        S.detailChanged = {};
-        document.querySelectorAll('.frow.dirty').forEach(el => el.classList.remove('dirty'));
-        // 刷新详情，拿到服务器最新值
-        try {
-          const v = await API.fetchDetail(S.detailId);
-          S.detail = v;
-        } catch (e) {}
-      } else {
-        const mask = document.createElement('div');
-        mask.className = 'modal-mask';
-        mask.innerHTML = `<div class="modal-box">
-          <div class="modal-title" style="color:#e94b4b">${statusOk ? '保存失败' : '状态未保存'}</div>
-          <div style="font-size:13.5px;line-height:1.7;padding:4px 0 14px">
-            ${normalOk && !statusOk ? '<div style="color:#18a058;margin-bottom:8px">✓ 其他字段已保存</div>' : ''}
-            <div style="color:#e94b4b">${esc(errMsg)}</div>
-          </div>
-          <button class="btn" data-cancel>知道了</button>
-        </div>`;
-        document.body.appendChild(mask);
-        mask.querySelector('[data-cancel]').onclick = () => mask.remove();
-        mask.onclick = e => { if (e.target === mask) mask.remove(); };
-      }
-    } finally {
-      loading(false);
+      return l;
     }
-  }
-
-  /** 加载工作措施（子表） */
-  async function loadMeasures(dataId) {
-    const box = $('measure-list');
-    if (!box) return;
-    try {
-      const list = await API.fetchMeasures(dataId, S.paramDataId);
-      S.measures = list;
-      renderMeasures(list);
-    } catch (e) {
-      box.innerHTML = `<div class="muted" style="padding:16px;text-align:center">${esc(e.message)}</div>`;
-    }
-  }
-
-  /** 措施列表（详情页内） */
-  function renderMeasures(list) {
-    const box = $('measure-list');
-    if (!box) return;
-
-    if (!list || !list.length) {
-      box.innerHTML = '<div class="muted" style="padding:16px;text-align:center">暂无工作措施</div>';
-      return;
+    function readInt() {
+      if (der[i] !== 0x02) throw new Error('期望 INTEGER');
+      i++;
+      const len = readLen();
+      let v = 0n;
+      for (let k = 0; k < len; k++) v = (v << 8n) | BigInt(der[i + k]);
+      i += len;
+      return v;
     }
 
-    const done = list.filter(m => m.state === 143).length;
-    box.innerHTML = `<div class="m-summary">共 ${list.length} 项，已完成 ${done} 项</div>` +
-      list.map((m, i) => {
-        const ok = m.state === 143;
-        return `<div class="m-item ${ok ? 'ok' : ''}" data-mi="${i}">
-          <div class="m-idx">${i + 1}</div>
-          <div class="m-txt">
-            <div class="m-desc">${esc(m.desc) || '(未命名)'}</div>
-            <div class="m-code">${esc(m.code)}</div>
-          </div>
-          <div class="m-state ${ok ? 'ok' : ''}">${esc(m.stateName) || '未处理'}</div>
-        </div>`;
-      }).join('');
-
-    box.querySelectorAll('.m-item').forEach(el => {
-      el.onclick = () => openMeasureSheet(Number(el.dataset.mi));
-    });
+    if (der[i] !== 0x30) throw new Error('SPKI 格式错误');
+    i++; readLen();                       // 外层 SEQ
+    if (der[i] === 0x30) { i++; readLen(); i += 0; }  // 算法 SEQ，跳过内容
+    // 跳过算法 OID + NULL
+    // 重新可靠解析：直接搜索 BIT STRING (0x03) 后的 SEQ
+    let j = 0;
+    while (j < der.length && der[j] !== 0x03) j++;
+    if (j >= der.length) throw new Error('未找到 BIT STRING');
+    i = j + 1;
+    const bsLen = readLen();
+    i++; // 跳过 unused bits 字节
+    if (der[i] !== 0x30) throw new Error('RSAPublicKey 格式错误');
+    i++; readLen();
+    const n = readInt();
+    const e = readInt();
+    return { n, e };
   }
 
-  /* ============ 措施扫码（整屏卡片，左右滑动） ============ */
+  /** PKCS#1 v1.5 填充 + 模幂 */
+  function rsaEncryptPkcs1(text, pem) {
+    const { n, e } = parsePublicKey(pem);
+    const k = Math.ceil(n.toString(16).length / 2);   // 模长（字节）
 
-  function openMeasureSheet(index) {
-    S.mIdx = index;
-    renderMeasureSheet();
-  }
+    const msg = new TextEncoder().encode(text);
+    if (msg.length > k - 11) throw new Error('内容过长');
 
-  function renderMeasureSheet() {
-    const list = S.measures || [];
-    if (!list.length) return;
-
-    let idx = S.mIdx;
-    if (idx < 0) idx = 0;
-    if (idx > list.length - 1) idx = list.length - 1;
-    S.mIdx = idx;
-
-    const m = list[idx];
-    const ok = m.state === 143;
-
-    let mask = document.getElementById('measure-sheet');
-    if (!mask) {
-      mask = document.createElement('div');
-      mask.id = 'measure-sheet';
-      mask.className = 'ms-mask';
-      document.body.appendChild(mask);
-    }
-    mask.style.display = 'flex';
-
-    mask.innerHTML = `<div class="ms-box">
-      <div class="ms-head">
-        <span class="ms-title">工作措施</span>
-        <span class="ms-count">${idx + 1} / ${list.length}</span>
-        <span class="ms-x" id="ms-close">×</span>
-      </div>
-
-      <div class="ms-body" id="ms-body">
-        <div class="ms-code">${esc(m.code)}</div>
-        <div class="ms-desc">${esc(m.desc)}</div>
-
-        <div class="ms-state-row">
-          <div class="ms-state-label">措施状态</div>
-          <div class="ms-state-val ${ok ? 'ok' : ''}" id="ms-state">${esc(m.stateName) || '未处理'}</div>
-        </div>
-
-        <button class="ms-btn-scan" id="ms-scan">一键扫码</button>
-
-        <div class="ms-hint">← 右滑上一条　　左滑下一条 →</div>
-      </div>
-    </div>`;
-
-    // 一键扫码
-    document.getElementById('ms-scan').onclick = () => scanMeasure(m);
-
-    document.getElementById('ms-close').onclick = closeMeasureSheet;
-
-    // 手势滑动
-    const body = document.getElementById('ms-body');
-    let sx = 0, sy = 0, tracking = false;
-    body.addEventListener('touchstart', e => {
-      if (e.touches.length !== 1) return;
-      sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
-    }, { passive: true });
-    body.addEventListener('touchend', e => {
-      if (!tracking) return;
-      tracking = false;
-      const t = e.changedTouches[0];
-      const dx = t.clientX - sx, dy = t.clientY - sy;
-      if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy)) return;
-      if (dx < 0) {
-        // 右→左：下一个
-        if (S.mIdx >= (S.measures || []).length - 1) return toast('已经是最后一个了');
-        S.mIdx += 1; renderMeasureSheet();
-      } else {
-        // 左→右：上一个
-        if (S.mIdx <= 0) return toast('已经是第一个了');
-        S.mIdx -= 1; renderMeasureSheet();
-      }
-    }, { passive: true });
-  }
-
-  function closeMeasureSheet() {
-    const m = document.getElementById('measure-sheet');
-    if (m) m.style.display = 'none';
-  }
-
-  /**
-   * 一键扫码：状态置为「正常」并同步服务器
-   * 不限状态、不限工单是否已完成，可反复点
-   */
-  async function scanMeasure(m) {
-    if (!m) return;
-
-    // 记下扫码时的索引，防止用户立刻滑走后刷错行
-    const myIdx = (S.measures || []).indexOf(m);
-
-    // 立刻点亮，不等服务器
-    m.state = API.MEASURE_STATE.normal;
-    m.stateName = '正常';
-    paintStateAt(myIdx);
-    paintListItem(m);
-
-    // 服务器同步在后台跑，不锁界面、不重绘
-    API.saveMeasureState(S.detailId, m.id, API.MEASURE_STATE.normal, S.paramDataId)
-      .catch(e => {
-        toast(e.message || '同步失败');
-        m.state = 0;
-        m.stateName = '未处理';
-        paintStateAt(myIdx);
-        paintListItem(m);
-      });
-  }
-
-  /**
-   * 只更新卡片上的状态文字（不重绘，滑动不被打断）
-   * 只有当前显示的就是这一行时才改，否则不动
-   */
-  function paintStateAt(idx) {
-    if (idx !== S.mIdx) return;           // 已经滑走了，不去碰当前卡片
-    const list = S.measures || [];
-    const m = list[idx];
-    const box = document.getElementById('ms-state');
-    if (!box || !m) return;
-    const ok = m.state === API.MEASURE_STATE.normal;
-    box.textContent = m.stateName || '未处理';
-    box.classList.toggle('ok', ok);
-  }
-
-  /** 更新详情页列表里那一条的状态 */
-  function paintListItem(m) {
-    const list = S.measures || [];
-    const i = list.indexOf(m);
-    if (i < 0) return;
-    const el = document.querySelector('.m-item[data-mi="' + i + '"]');
-    if (!el) return;
-    const ok = m.state === API.MEASURE_STATE.normal;
-    el.classList.toggle('ok', ok);
-    const st = el.querySelector('.m-state');
-    if (st) {
-      st.textContent = m.stateName || '未处理';
-      st.classList.toggle('ok', ok);
-    }
-    // 更新摘要
-    const done = list.filter(x => x.state === API.MEASURE_STATE.normal).length;
-    const sum = document.querySelector('.m-summary');
-    if (sum) sum.textContent = '共 ' + list.length + ' 项，已完成 ' + done + ' 项';
-  }
-
-  /* ==================== 筛选面板 ==================== */
-
-  const filterPanel = () => $('filter-panel');
-
-  function openFilter() {
-    const parts = (S.shiftFilter.values || '').split('|');
-    $('f-start').value = parts[0] || '';
-    $('f-end').value = parts[1] || '';
-    $('q-hint').textContent = '';
-    filterPanel().classList.add('show');
-  }
-
-  function closeFilter() {
-    filterPanel().classList.remove('show');
-  }
-
-  /** 宽松解析用户输入的时间 → YYYY-MM-DD HH:mm:ss */
-  function parseTime(v) {
-    if (!v) return '';
-    let t = String(v).trim().replace('T', ' ').replace(/\//g, '-');
-    // 补秒
-    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(t)) t += ':00';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) t += ' 00:00:00';
-    // 只给小时
-    if (/^\d{4}-\d{2}-\d{2} \d{2}$/.test(t)) t += ':00:00';
-    const d = new Date(t.replace(/-/g, '/'));
-    if (isNaN(d.getTime())) return '';
-    const pad = n => ('0' + n).slice(-2);
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-           ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-  }
-
-  function bindQuick(shift) {
-    const r = API.buildShift(shift);
-    $('f-start').value = r.start;
-    $('f-end').value = r.end;
-    $('q-hint').textContent =
-      (shift === 'day' ? '白班' : '夜班') + ' · ' + r.start + ' ~ ' + r.end;
-  }
-
-  function applyFilter() {
-    const s = parseTime($('f-start').value);
-    const e = parseTime($('f-end').value);
-
-    if (!s && !e) {
-      S.shiftFilter = { fields: '', ops: '', values: '' };
-      closeFilter();
-      loadList(true);
-      return;
-    }
-    if (!s || !e) {
-      return toast('请把开始和结束时间都填完整');
-    }
-
-    const fieldId = String(API.CFG.FIELD_PLAN_TIME);
-    S.shiftFilter = { fields: fieldId, ops: 'r', values: s + '|' + e };
-    closeFilter();
-    loadList(true);
-  }
-
-  $('btn-login').onclick = doLogin;
-  $('inp-pass').onkeydown = (e) => { if (e.key === 'Enter') doLogin(); };
-  $('btn-filter').onclick = openFilter;
-  $('filter-close').onclick = closeFilter;
-  $('filter-reset').onclick = () => {
-    $('f-start').value = '';
-    $('f-end').value = '';
-    $('q-hint').textContent = '';
-  };
-  $('filter-apply').onclick = applyFilter;
-  $('q-day').onclick = () => bindQuick('day');
-  $('q-night').onclick = () => bindQuick('night');
-
-  $('btn-more').onclick = () => loadList(false);
-
-  $('btn-back').onclick = () => {
-    showView('list');
-    if (S.list && S.list.length) {
-      renderList();
+    // 填充：0x00 || 0x02 || PS(随机非零) || 0x00 || M
+    const padLen = k - msg.length - 3;
+    const ps = new Uint8Array(padLen);
+    const rnd = new Uint8Array(padLen);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      crypto.getRandomValues(rnd);
     } else {
-      loadList(true);
+      for (let i = 0; i < padLen; i++) rnd[i] = Math.floor(Math.random() * 256);
     }
-  };
-
-  $('btn-logout').onclick = () => {
-    if (confirm('确定退出登录？')) {
-      API.clear();
-      location.reload();
+    for (let i = 0; i < padLen; i++) {
+      ps[i] = rnd[i] === 0 ? 1 : rnd[i];   // 不能是 0
     }
-  };
 
-  filterPanel().onclick = (e) => {
-    if (e.target === filterPanel()) closeFilter();
-  };
+    const em = new Uint8Array(k);
+    em[0] = 0x00;
+    em[1] = 0x02;
+    em.set(ps, 2);
+    em[2 + padLen] = 0x00;
+    em.set(msg, 3 + padLen);
 
-  /* ==================== 启动 ==================== */
+    // 转 BigInt
+    let m = 0n;
+    for (let i = 0; i < k; i++) m = (m << 8n) | BigInt(em[i]);
 
-  (async function init() {
-    // 服务器地址固定，永远不展示
-    $('inp-base').value = FIXED_BASE;
+    // c = m^e mod n
+    let c = 1n;
+    let base = m % n;
+    let exp = e;
+    while (exp > 0n) {
+      if (exp & 1n) c = (c * base) % n;
+      base = (base * base) % n;
+      exp >>= 1n;
+    }
 
-    const st = API.load();
-    if (st.token && st.baseUrl) {
-      // 有会话 → 直接进列表
-      $('inp-user').value = st.userName || '';
-      showView('list');
-      loading(true);
+    // BigInt → 字节
+    const out = new Uint8Array(k);
+    let t = c;
+    for (let i = k - 1; i >= 0; i--) {
+      out[i] = Number(t & 0xffn);
+      t >>= 8n;
+    }
+    return bytesToB64(out);
+  }
+
+  async function rsaEncrypt(text, pemB64) {
+    const pem = atob(pemB64.trim());
+    return rsaEncryptPkcs1(text, pem);
+  }
+
+  /** 取服务器公钥 */
+  async function fetchPublicKey() {
+    const d = await req('security-info', { _retried: true });
+    const pc = (d.data || {}).public_code;
+    if (!pc) throw new Error('服务器未返回公钥');
+    return pc;
+  }
+
+  /* ---------- 1. 登录 ---------- */
+  async function login(baseUrl, email, password) {
+    state.baseUrl = normalizeBase(baseUrl);
+
+    // 1. 取公钥
+    const pub = await fetchPublicKey();
+
+    // 2. 加密（email 和 password 都要加密）
+    const emailEnc = await rsaEncrypt(email, pub);
+    const passEnc = await rsaEncrypt(password, pub);
+
+    // 3. 登录
+    // 先尝试普通登录
+    let d = await req('login', {
+      method: 'POST',
+      body: { email: emailEnc, password: passEnc }
+    });
+
+    // 已被占用 → 踢掉旧会话重新登录
+    if (d && d.data && d.data.confirm_kick) {
+      d = await req('login', {
+        method: 'POST',
+        body: { email: emailEnc, password: passEnc, kick_same_user: 1 }
+      });
+    }
+
+    if (!d.success) {
+      if (d.data && d.data.conflict) {
+        const e = new Error('存在多个用户，需要选择');
+        e.code = 'CONFLICT'; e.data = d.data;
+        throw e;
+      }
+      throw new Error(d.message || d.tb || '登录失败');
+    }
+
+    const info = d.data || {};
+    state.token = info.token || '';
+    state.tokenId = info.token_id || '';
+    state.userName = info.user_name || email;
+    state.email = email;
+    state.password = password;
+    save();
+    return info;
+  }
+
+  /** 静默重新登录 */
+  let _reloginPromise = null;
+  async function relogin() {
+    if (_reloginPromise) return _reloginPromise;
+    _reloginPromise = (async () => {
       try {
-        API.state.contentId = API.CFG.CONTENT_WO;
-        API.state.parameterId = API.CFG.PARAM_PM;
-        await loadFilters();
-        await loadList(true);
-      } catch (e) {
-        if (e.code === 401) {
-          API.clear();
-          showView('login');
-          restoreCred();
-          toast('登录已过期，请重新登录');
+        const pub = await fetchPublicKey();
+        const emailEnc = await rsaEncrypt(state.email, pub);
+        const passEnc = await rsaEncrypt(state.password, pub);
+        const d = await req('login', {
+          method: 'POST',
+          body: { email: emailEnc, password: passEnc, kick_same_user: 1 },
+          _retried: true
+        });
+        const ok = d && (d.success ||
+          (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+        if (ok && d.data && d.data.token) {
+          state.token = d.data.token;
+          state.tokenId = d.data.token_id || '';
+          save();
+          return true;
         }
+      } catch (e) {
+        // 忽略，交给上层报错
       } finally {
-        loading(false);
+        _reloginPromise = null;
       }
-    } else {
-      // 没会话 → 登录页，回填记住的账号密码（不自动登录）
-      showView('login');
-      restoreCred();
-    }
-  })();
-
-  /** 回填记住的账号密码（仅回填，不自动登录） */
-  function restoreCred() {
-    const remembered = localStorage.getItem(REMEMBER_KEY) === '1';
-    const cred = loadCred();
-    if (remembered && cred) {
-      $('inp-user').value = cred.u || '';
-      $('inp-pass').value = cred.p || '';
-      if ($('chk-remember')) $('chk-remember').checked = true;
-    } else {
-      if ($('chk-remember')) $('chk-remember').checked = false;
-    }
+      return false;
+    })();
+    return _reloginPromise;
   }
 
-  // 暴露给调试
-  window.__app = { S, loadList, openDetail };
+  /* ---------- 2. 菜单：找「预防性维护」 ---------- */
+  async function fetchMenu() {
+    const d = await req('menu');
+    if (!d.success) throw new Error(d.message || '获取菜单失败');
+    state.menuRaw = d.data;
+    save();
+
+    const found = findPreventive(d.data);
+    if (found) {
+      state.contentId = found.content_id;
+      state.parameterId = found.parameter_id;
+      save();
+    }
+    return { raw: d.data, found };
+  }
+
+  /**
+   * 在菜单树里找「预防性维护」
+   * 结构：menu: [{ seq, title, menuList: [{ content_id, parameter_id, menu_id, ... }] }]
+   */
+  function findPreventive(menuData) {
+    if (!Array.isArray(menuData)) return null;
+
+    const flat = [];
+    menuData.forEach(group => {
+      const list = group.menuList || group.children || group.list || [];
+      if (Array.isArray(list)) {
+        list.forEach(item => flat.push(item));
+      }
+    });
+
+    // 精确匹配
+    let hit = flat.find(it => {
+      const t = it.title || it.name || it.label || '';
+      return t.indexOf('预防性维护') >= 0;
+    });
+    // 模糊匹配
+    if (!hit) {
+      hit = flat.find(it => {
+        const t = it.title || it.name || it.label || '';
+        return t.indexOf('预防') >= 0 && t.indexOf('维护') >= 0;
+      });
+    }
+    if (!hit) return null;
+
+    return {
+      content_id: hit.content_id,
+      parameter_id: hit.parameter_id || 0,
+      menu_id: hit.menu_id,
+      parent_menu_id: hit.parent_menu_id,
+      title: hit.title,
+      all: flat,
+      raw: hit
+    };
+  }
+
+  /* ---------- 3. 筛选标签 ---------- */
+  async function fetchFilters() {
+    const d = await req('content/filter/list', {
+      params: { parameter_id: state.parameterId, content_id: state.contentId }
+    });
+    if (!d.success) throw new Error(d.message || '获取筛选失败');
+    const list = (d.data && d.data.data) || [];
+    return { list, isReverse: d.data && d.data.is_reverse };
+  }
+
+  /* ---------- 4. 工单列表 ---------- */
+  async function fetchList(opts = {}) {
+    const {
+      filterId = 0, page = 0, pageSize = 10,
+      fields = '', ops = '', values = '',
+      contentId = state.contentId, parameterId = state.parameterId
+    } = opts;
+
+    const params = {
+      content_id: contentId || CFG.CONTENT_WO,
+      parameter_id: parameterId || CFG.PARAM_PM,
+      pagenum: page,
+      pagesize: pageSize,
+      batch_ids_num: 0,
+      batch_check_task_id: '',
+      sortorder: '',
+      sortdatafield: '',
+      filter_id: filterId
+    };
+    if (fields) { params.fields = fields; params.ops = ops; params.values = values; }
+
+    const d = await req('content/list/filter/data-list', { params });
+
+    // bluebee 用 status 判断
+    const ok = d && (d.success === true ||
+                     (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '获取工单失败');
+
+    return d.data || { totalrecords: 0, list: [] };
+  }
+
+  /* ---------- 4.5 字段定义 ---------- */
+
+  /**
+   * 获取工单表单字段定义（91 个）
+   * 返回 [{ field_id, label, type, ... }]
+   */
+  async function fetchFormFields(contentId) {
+    const d = await req('content/display-field/list', {
+      params: { content_id: contentId || CFG.CONTENT_WO }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '获取字段失败');
+    const groups = (d.data && d.data.data) || [];
+    const out = [];
+    groups.forEach(g => {
+      (g.displayField || []).forEach(f => {
+        out.push({
+          field_id: f.field_id,
+          label: f.label || f.field_label || '',
+          type: f.type || 'text',
+          display: f.display !== false,
+          extra: f.extra || {}
+        });
+      });
+    });
+    return out;
+  }
+
+  async function fetchFields() {
+    const d = await req('content/display-field/list', {
+      params: { content_id: state.contentId }
+    });
+    if (!d.success) return [];
+    const list = d.data || [];
+    return Array.isArray(list) ? list : (list.data || []);
+  }
+
+  /**
+   * 从字段列表里找「安排时间」的 field_id
+   * 字段结构：{ field_id, field_name, label, title, type }
+   */
+  function findPlanFieldId(fields) {
+    if (!Array.isArray(fields)) return '';
+    const keys = ['安排时间', '计划时间', '排班时间'];
+    for (const kw of keys) {
+      const hit = fields.find(f => {
+        const lb = f.label || f.field_label || f.title || f.name || f.field_name || '';
+        return String(lb).indexOf(kw) >= 0;
+      });
+      if (hit) return hit.field_id || hit.id || hit.field_name || '';
+    }
+    return '';
+  }
+
+  /* ---------- 5. 多列筛选项 ---------- */
+  async function fetchMultiFilter() {
+    const d = await req('content/multi-filter/headline-options', {
+      params: { content_id: state.contentId, parameter_id: state.parameterId }
+    });
+    return d.success ? d.data : null;
+  }
+
+  /* ---------- 6. 工单详情 ---------- */
+
+  /**
+   * 拉取工单详情
+   * 返回 { success, data: [...] }
+   * 数组元素：{ field_id, field_lable, value }
+   */
+  async function fetchDetail(dataId, contentId, parameterId) {
+    const d = await req('content/detail/headline-data', {
+      params: {
+        content_id: contentId || CFG.CONTENT_WO,
+        data_id: dataId,
+        fields: '',
+        values: ''
+      }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '获取详情失败');
+    return d.data || [];
+  }
+
+  /**
+   * 保存工单
+   * @param {number} dataId
+   * @param {Array} changes  形如 [{field_id, value, isUpdate:true}]
+   * @param {object} meta    { workflow_field_id, workflow_data_id, ... }
+   */
+  async function saveDetail(dataId, changes, meta) {
+    meta = meta || {};
+    const payload = {
+      content_id: CFG.CONTENT_WO,
+      data_id: dataId,
+      parameter_field_id: meta.parameter_field_id || 0,
+      parameter_data_id: meta.parameter_data_id || 0,
+      workflow_field_id: meta.workflow_field_id || CFG.FIELD_STATUS,
+      workflow_data_id: meta.workflow_data_id || null,
+      entity_field_id: meta.entity_field_id || 0,
+      entity_data_id: meta.entity_data_id || 0,
+      values: changes.map(c => ({
+        field_id: c.field_id,
+        value: c.value === undefined ? null : c.value,
+        isUpdate: true
+      }))
+    };
+
+    const d = await req('content/detail/headline-data', {
+      method: 'POST',
+      body: payload
+    });
+
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '保存失败');
+    return d;
+  }
+
+  /**
+   * 拉取子表（工作措施等）
+   * 找不到就返回空数组，不影响主流程
+   */
+  /** 工作措施子表 content_id */
+  const GRID_MEASURE = 157;
+
+  /** 措施状态取值 */
+  const MEASURE_STATE = { normal: 143, standby: 144, error: 145, pending: 146 };
+  const MEASURE_STATE_NAME = { 143: '正常', 144: '备机', 145: '异常', 146: '未处理' };
+
+  /**
+   * 拉取工单的工作措施
+   * 返回 [{ id, code, desc, state, stateName, raw }]
+   */
+  async function fetchMeasures(dataId, paramDataId) {
+    const d = await req('content/detail/datagrid-data-list', {
+      params: {
+        content_id: CFG.CONTENT_WO,
+        content_data_id: dataId,
+        relational_content_id: GRID_MEASURE,
+        relational_data_id: dataId,
+        parameter_field_id: CFG.PARAM_FIELD,
+        parameter_data_id: paramDataId || 0,
+        workflow_field_id: CFG.FIELD_STATUS,
+        workflow_data_id: 70,
+        entity_field_id: 0,
+        entity_data_id: 0,
+        pagenum: 0,
+        pagesize: 200
+      }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '工作措施加载失败');
+
+    const rows = Array.isArray(d.data) ? d.data : ((d.data && d.data.data) || []);
+    return rows.map(r => {
+      const codeObj = r['327'] || {};
+      const descObj = r['328'] || {};
+      const st = r['940'];
+      // 940 可能是数字 id、"正常" 字符串，或 {id,name}
+      let stateId = 0, stateName = '';
+      if (typeof st === 'number') { stateId = st; stateName = MEASURE_STATE_NAME[st] || ''; }
+      else if (typeof st === 'string' && st) {
+        const found = Object.keys(MEASURE_STATE_NAME).find(k => MEASURE_STATE_NAME[k] === st);
+        stateId = found ? Number(found) : 0;
+        stateName = st;
+      } else if (st && typeof st === 'object') {
+        stateId = st.id || 0;
+        stateName = st.name || MEASURE_STATE_NAME[stateId] || '';
+      }
+      return {
+        id: r.id,
+        code: codeObj.name || '',
+        desc: descObj.name || '',
+        state: stateId,
+        stateName: stateName,
+        raw: r
+      };
+    });
+  }
+
+  /**
+   * 保存单条措施的状态
+   * @param {number} dataId    工单 id
+   * @param {number} rowId     措施行 id
+   * @param {number} stateId   143 正常 / 144 备机 / 145 异常 / 146 未处理
+   * @param {number} paramDataId
+   */
+  async function saveMeasureState(dataId, rowId, stateId, paramDataId) {
+    const d = await req('content/detail/datagrid-data', {
+      method: 'POST',
+      body: {
+        content_id: CFG.CONTENT_WO,
+        content_data_id: dataId,
+        relational_content_id: GRID_MEASURE,
+        relational_data_id: rowId,          // ★ 必须是措施行的 id，不是工单 id
+        parameter_field_id: CFG.PARAM_FIELD,
+        parameter_data_id: paramDataId || 0,
+        workflow_field_id: CFG.FIELD_STATUS,
+        workflow_data_id: 70,
+        entity_field_id: 0,
+        entity_data_id: 0,
+        values: [{
+          type: 'radioBox',
+          field_id: 940,
+          value: [stateId],
+          field_value: [stateId],
+          isUpdate: true,
+          is_delegate: false,
+          delegate_id: -1
+        }]
+      }
+    });
+    const ok = d && (d.success || (typeof d.status === 'string' && d.status.indexOf('10_000_') === 0));
+    if (!ok) throw new Error((d && (d.message || d.tb)) || '保存失败');
+    return d;
+  }
+
+  /* ---------- 7. 扫码校验 ---------- */
+  async function scanCode({ contentId, gridId, fkdContentId, code }) {
+    const d = await req('content/scan-code', {
+      params: {
+        type: 'detail',
+        content_id: contentId,
+        data_grid_id: gridId,
+        fkd_content_id: fkdContentId,
+        code
+      }
+    });
+    return d;
+  }
+
+  /* ---------- 班次时间 ---------- */
+  function pad(n) { return ('0' + n).slice(-2); }
+  function fmt(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  /**
+   * 班次时间区间
+   * 实测数据：
+   *   白班 08:00-20:00
+   *   夜班 20:00-次日08:00（跨日，需分两段查）
+   */
+  /**
+   * 班次时间区间（严格按需求）
+   *   白班：当天 08:00:00 ~ 当天 20:00:00
+   *   夜班：当天 20:00:00 ~ 次日 08:00:00
+   */
+  /**
+   * 班次时间范围
+   *   白班：当天 08:00:00 ~ 20:00:00
+   *   夜班：20:00 ~ 次日 08:00
+   *
+   * 夜班归属规则：
+   *   若当前时刻已过零点但未到 08:00（即凌晨 00:00~07:59:59），
+   *   说明这个夜班是「前一天」开始的 →
+   *     起 = 前一天 20:00
+   *     止 = 当天 08:00
+   *   其余时刻（08:00 之后）→
+   *     起 = 当天 20:00
+   *     止 = 次日 08:00
+   */
+  function buildShift(shift, now = new Date()) {
+    const pad = n => ('0' + n).slice(-2);
+    const fmtDate = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+
+    if (shift === 'day') {
+      return {
+        start: fmtDate(now) + ' 08:00:00',
+        end:   fmtDate(now) + ' 20:00:00'
+      };
+    }
+
+    const h = now.getHours();
+    const DAY = 86400000;
+
+    if (h < 8) {
+      // 凌晨 00:00 ~ 07:59 → 属于「前一晚」的夜班
+      const prev = new Date(now.getTime() - DAY);
+      return {
+        start: fmtDate(prev) + ' 20:00:00',
+        end:   fmtDate(now)  + ' 08:00:00'
+      };
+    }
+
+    // 08:00 之后 → 当天 20:00 ~ 次日 08:00
+    const next = new Date(now.getTime() + DAY);
+    return {
+      start: fmtDate(now)  + ' 20:00:00',
+      end:   fmtDate(next) + ' 08:00:00'
+    };
+  }
+
+  return {
+    CFG, HEADLINE_FIELDS, WORKFLOW, USERS, fetchUsers, fetchWorkflowOptions, state, save, load, clear, req, normalizeBase, rsaEncrypt, fetchPublicKey,
+    KNOWN_BASE,
+    login, fetchMenu, fetchFilters, fetchList, fetchMultiFilter, fetchDetail, scanCode,
+    fetchFields, findPlanFieldId, saveDetail, fetchMeasures, saveMeasureState,
+    MEASURE_STATE, MEASURE_STATE_NAME, GRID_MEASURE, fetchFormFields,
+    buildShift,
+    findPreventive
+  };
 })();
+
+window.API = API;
