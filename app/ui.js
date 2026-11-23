@@ -281,14 +281,18 @@
       if (desc.indexOf('白班') >= 0) shiftTag = '白班';
       else if (desc.indexOf('夜班') >= 0) shiftTag = '夜班';
 
+      // 负责人（责任人姓名，来自人员表 field592）
+      const owner = it['content108_content92$field592'] || '';
+
       html += `<div class="ticket" data-idx="${i}">
         <div class="code">${esc(code)}</div>
         <div class="title">${esc(desc)}</div>
         <div class="meta">
           ${shiftTag ? `<span class="badge">${shiftTag}</span>` : ''}
-          <span class="badge badge-time">${esc(shiftRange(desc))}</span>
+          <span class="badge badge-time">${esc(shiftRange(desc, plan))}</span>
           ${stName ? `<span class="muted">${esc(stName)}</span>` : ''}
         </div>
+        ${owner ? `<div class="owner-line"><span class="owner-ic">👤</span>${esc(owner)}</div>` : ''}
       </div>`;
     });
 
@@ -358,11 +362,18 @@
    *   白班 → 07:00-08:30
    *   夜班 → 19:00-20:30
    */
-  function shiftRange(desc) {
+  function shiftRange(desc, dateSource) {
     const d = String(desc || '');
-    if (d.indexOf('夜班') >= 0) return '19:00-20:30';
-    if (d.indexOf('白班') >= 0) return '07:00-08:30';
-    return '';
+    let r = '';
+    if (d.indexOf('夜班') >= 0) r = '19:00-20:30';
+    else if (d.indexOf('白班') >= 0) r = '07:00-08:30';
+    if (!r) return '';
+
+    // 日期取自安排时间，格式 YYYY-MM-DD
+    const ds = String(dateSource || '');
+    const m = ds.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1] + ' ' + r;
+    return r;
   }
 
   /** 值 → 显示文本 */
