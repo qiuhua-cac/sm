@@ -421,19 +421,26 @@
     const s1 = hmPart(wStart);
     const s2 = hmPart(wEnd);
 
+    // 有实际开始+结束时间 → 显示实际区间
     if (s1 && s2) {
-      // 有实际工作时间
       const dd = datePart(wStart) || d;
       if (s1 === s2) return dd + ' ' + s1;
       return dd + ' ' + s1 + '-' + s2;
     }
-    if (s1) return (datePart(wStart) || d) + ' ' + s1;
 
-    // 只有安排时间
+    // 有安排时间 → 安排时间 + 2 小时
     const pm = hmPart(plan);
-    if (d && pm) return d + ' ' + pm;
+    if (d && pm) {
+      const h = parseInt(pm.slice(0, 2), 10);
+      const m = pm.slice(3, 5);
+      const eh = (h + 2) % 24;
+      return d + ' ' + pm + '-' + ('0' + eh).slice(-2) + ':' + m;
+    }
+
+    if (s1) return (datePart(wStart) || d) + ' ' + s1;
     return '';
   }
+
 
   /** 值 → 显示文本 */
   function displayValue(v) {
@@ -1045,27 +1052,31 @@
    * 一键扫码：状态置为「正常」并同步服务器
    * 不限状态、不限工单是否已完成，可反复点
    */
-  async function scanMeasure(m) {
+  /**
+   * 一键扫码：状态置为「正常」并立刻同步服务器
+   * 不限状态、不限工单是否已完成，可反复点
+   */
+  function scanMeasure(m) {
     if (!m) return;
 
-    // 记下扫码时的索引，防止用户立刻滑走后刷错行
     const myIdx = (S.measures || []).indexOf(m);
 
-    // 立刻点亮，不等服务器
+    // 界面立刻点亮
     m.state = API.MEASURE_STATE.normal;
     m.stateName = '正常';
     paintStateAt(myIdx);
     paintListItem(m);
     msToast('✓ 扫码成功');
 
-    // 服务器同步在后台跑，不锁界面、不重绘
+    // 立刻提交到服务器（不等待、不阻塞界面）
     API.saveMeasureState(S.detailId, m.id, API.MEASURE_STATE.normal, S.paramDataId)
       .catch(e => {
-        toast(e.message || '同步失败');
+        // 失败才回滚
         m.state = 0;
         m.stateName = '未处理';
         paintStateAt(myIdx);
         paintListItem(m);
+        toast('同步失败：' + (e.message || ''));
       });
   }
 
