@@ -1151,8 +1151,10 @@
     const r = API.buildShift(shift);
     $('f-start').value = r.start;
     $('f-end').value = r.end;
-    $('q-hint').textContent =
-      (shift === 'day' ? '白班' : '夜班') + ' · ' + r.start + ' ~ ' + r.end;
+    const label = shift === 'day' ? '白班'
+                : shift === 'night2' ? '夜班2'
+                : '夜班1';
+    $('q-hint').textContent = label + ' · ' + r.start.slice(0, 16) + ' ~ ' + r.end.slice(0, 16);
   }
 
   function applyFilter() {
@@ -1186,7 +1188,8 @@
   };
   $('filter-apply').onclick = applyFilter;
   $('q-day').onclick = () => bindQuick('day');
-  $('q-night').onclick = () => bindQuick('night');
+  $('q-night1').onclick = () => bindQuick('night');
+  $('q-night2').onclick = () => bindQuick('night2');
 
   $('btn-more').onclick = () => loadList(false);
 
