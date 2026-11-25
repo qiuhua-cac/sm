@@ -113,6 +113,12 @@ body{display:flex;flex-direction:column;overflow:hidden}
 .quick .btn{flex:1;padding:11px 0;font-size:14px;border-radius:9px;font-weight:500}
 .quick .btn.day{background:#18b566}
 .quick .btn.night{background:#2979ff}
+.quick.quick-night{gap:8px;margin:8px 0 4px}
+.quick.quick-night .btn{flex:1 1 50%;min-width:0;font-size:13.5px}
+.quick-note{font-size:11.5px;color:#9aa4b4;line-height:1.65;margin:2px 2px 6px;
+  padding-left:2px}
+.quick-note div{padding-left:9px;position:relative}
+.quick-note div::before{content:"·";position:absolute;left:0;color:#c0c6d0}
 
 /* ---------- 详情页 ---------- */
 #detail-view{padding-bottom:16px}
@@ -333,7 +339,14 @@ body{display:flex;flex-direction:column;overflow:hidden}
       </div>
       <div class="quick">
         <button class="btn day" id="q-day">白 班</button>
-        <button class="btn night" id="q-night">夜 班</button>
+      </div>
+      <div class="quick quick-night">
+        <button class="btn night" id="q-night1">夜班1</button>
+        <button class="btn night" id="q-night2">夜班2</button>
+      </div>
+      <div class="quick-note" id="quick-note">
+        <div>夜班1：当天 20:00 起扫点</div>
+        <div>夜班2：凌晨扫点（取前一天）</div>
       </div>
       <div class="hint-edit">可点击输入框手动修改时间</div>
       <div class="muted" id="q-hint" style="text-align:center"></div>
