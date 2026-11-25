@@ -781,9 +781,22 @@ const API = (() => {
    *     起 = 当天 20:00
    *     止 = 次日 08:00
    */
+  /**
+   * 班次时间范围
+   *
+   *   白班  = 当天 08:00 ~ 20:00
+   *   夜班1 = 当天 20:00 ~ 次日 08:00
+   *           （凌晨 00:00~07:59 点「夜班1」，取「当天」20:00 ~ 次日 08:00）
+   *   夜班2 = 夜班1 的日期往前减一天
+   *
+   * 举例（今天是 25 号）：
+   *   夜班1 → 25号 20:00 ~ 26号 08:00
+   *   夜班2 → 24号 20:00 ~ 25号 08:00
+   */
   function buildShift(shift, now = new Date()) {
     const pad = n => ('0' + n).slice(-2);
     const fmtDate = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    const DAY = 86400000;
 
     if (shift === 'day') {
       return {
@@ -792,25 +805,21 @@ const API = (() => {
       };
     }
 
-    const h = now.getHours();
-    const DAY = 86400000;
+    // 夜班基准日期：就是「今天」
+    const base = new Date(now.getTime());
 
-    if (h < 8) {
-      // 凌晨 00:00 ~ 07:59 → 属于「前一晚」的夜班
-      const prev = new Date(now.getTime() - DAY);
-      return {
-        start: fmtDate(prev) + ' 20:00:00',
-        end:   fmtDate(now)  + ' 08:00:00'
-      };
+    // 夜班2：基准日往前推一天
+    if (shift === 'night2') {
+      base.setTime(base.getTime() - DAY);
     }
 
-    // 08:00 之后 → 当天 20:00 ~ 次日 08:00
-    const next = new Date(now.getTime() + DAY);
+    const next = new Date(base.getTime() + DAY);
     return {
-      start: fmtDate(now)  + ' 20:00:00',
+      start: fmtDate(base) + ' 20:00:00',
       end:   fmtDate(next) + ' 08:00:00'
     };
   }
+
 
   return {
     CFG, HEADLINE_FIELDS, WORKFLOW, USERS, fetchUsers, fetchWorkflowOptions, state, save, load, clear, req, normalizeBase, rsaEncrypt, fetchPublicKey,
