@@ -768,55 +768,66 @@ const API = (() => {
    *   夜班：当天 20:00:00 ~ 次日 08:00:00
    */
   /**
-   * 班次时间范围
-   *   白班：当天 08:00:00 ~ 20:00:00
-   *   夜班：20:00 ~ 次日 08:00
-   *
-   * 夜班归属规则：
-   *   若当前时刻已过零点但未到 08:00（即凌晨 00:00~07:59:59），
-   *   说明这个夜班是「前一天」开始的 →
-   *     起 = 前一天 20:00
-   *     止 = 当天 08:00
-   *   其余时刻（08:00 之后）→
-   *     起 = 当天 20:00
-   *     止 = 次日 08:00
+   * 班次时间配置（可被「高级」面板切换）
+   *   day    : 白班
+   *   night  : 夜班（起止小时）
    */
+  const SHIFT_CFG = {
+    dayFrom: 8, dayTo: 20,      // 白班 08:00 ~ 20:00
+    nightFrom: 20, nightTo: 8   // 夜班 20:00 ~ 次日 08:00
+  };
+
+  /** 切换为紧凑班次（高级面板输入正确代码后调用） */
+  function setCompactShift(on) {
+    if (on) {
+      SHIFT_CFG.dayFrom = 8;   SHIFT_CFG.dayTo = 13;    // 白班 08:00 ~ 13:00
+      SHIFT_CFG.nightFrom = 20; SHIFT_CFG.nightTo = 1;  // 夜班 20:00 ~ 次日 01:00
+    } else {
+      SHIFT_CFG.dayFrom = 8;   SHIFT_CFG.dayTo = 20;
+      SHIFT_CFG.nightFrom = 20; SHIFT_CFG.nightTo = 8;
+    }
+    try { localStorage.setItem('bbmini_compact', on ? '1' : '0'); } catch (e) {}
+  }
+
+  function isCompactShift() {
+    try { return localStorage.getItem('bbmini_compact') === '1'; } catch (e) { return false; }
+  }
+
+  // 启动时恢复
+  if (isCompactShift()) setCompactShift(true);
+
   /**
    * 班次时间范围
    *
-   *   白班  = 当天 08:00 ~ 20:00
-   *   夜班1 = 当天 20:00 ~ 次日 08:00
-   *           （凌晨 00:00~07:59 点「夜班1」，取「当天」20:00 ~ 次日 08:00）
+   *   白班  = 当天 dayFrom:00 ~ 当天 dayTo:00
+   *   夜班1 = 当天 nightFrom:00 ~ 次日 nightTo:00
    *   夜班2 = 夜班1 的日期往前减一天
-   *
-   * 举例（今天是 25 号）：
-   *   夜班1 → 25号 20:00 ~ 26号 08:00
-   *   夜班2 → 24号 20:00 ~ 25号 08:00
    */
   function buildShift(shift, now = new Date()) {
     const pad = n => ('0' + n).slice(-2);
     const fmtDate = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    const hh = h => pad(h) + ':00:00';
     const DAY = 86400000;
 
     if (shift === 'day') {
       return {
-        start: fmtDate(now) + ' 08:00:00',
-        end:   fmtDate(now) + ' 20:00:00'
+        start: fmtDate(now) + ' ' + hh(SHIFT_CFG.dayFrom),
+        end:   fmtDate(now) + ' ' + hh(SHIFT_CFG.dayTo)
       };
     }
 
-    // 夜班基准日期：就是「今天」
+    // 夜班基准日期：今天
     const base = new Date(now.getTime());
+    if (shift === 'night2') base.setTime(base.getTime() - DAY);
 
-    // 夜班2：基准日往前推一天
-    if (shift === 'night2') {
-      base.setTime(base.getTime() - DAY);
-    }
+    // 结束时间：如果 nightTo 小于 nightFrom，说明跨天
+    const endDate = (SHIFT_CFG.nightTo <= SHIFT_CFG.nightFrom)
+      ? new Date(base.getTime() + DAY)
+      : base;
 
-    const next = new Date(base.getTime() + DAY);
     return {
-      start: fmtDate(base) + ' 20:00:00',
-      end:   fmtDate(next) + ' 08:00:00'
+      start: fmtDate(base)    + ' ' + hh(SHIFT_CFG.nightFrom),
+      end:   fmtDate(endDate) + ' ' + hh(SHIFT_CFG.nightTo)
     };
   }
 
@@ -827,7 +838,7 @@ const API = (() => {
     login, fetchMenu, fetchFilters, fetchList, fetchMultiFilter, fetchDetail, scanCode,
     fetchFields, findPlanFieldId, saveDetail, fetchMeasures, saveMeasureState,
     MEASURE_STATE, MEASURE_STATE_NAME, GRID_MEASURE, fetchFormFields,
-    buildShift,
+    buildShift, setCompactShift, isCompactShift, SHIFT_CFG,
     findPreventive
   };
 })();
