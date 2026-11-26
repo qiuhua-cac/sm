@@ -44,6 +44,8 @@
     $('actionbar').classList.toggle('hide', name !== 'list');
     $('btn-back').classList.toggle('hide', name !== 'detail');
     $('btn-logout').classList.toggle('hide', name !== 'list');
+    const adv = $('btn-adv');
+    if (adv) adv.classList.toggle('hide', name !== 'list');
     $('top-title').textContent =
       name === 'detail' ? '工单详情' : '预防性维护';
   }
@@ -1202,6 +1204,8 @@
     }
   };
 
+  $('btn-adv').onclick = () => openAdvanced();
+
   $('btn-logout').onclick = () => {
     if (confirm('确定退出登录？')) {
       API.clear();
@@ -1214,6 +1218,55 @@
   };
 
   /* ==================== 启动 ==================== */
+
+  /* ==================== 高级面板 ==================== */
+
+  const ADV_CODE = 'ADCE';
+
+  function openAdvanced() {
+    const cur = API.isCompactShift();
+
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    mask.innerHTML = `<div class="modal-box">
+      <div class="modal-title">高级</div>
+      <div class="adv-tip">请输入 4 位代码</div>
+      <input id="adv-input" class="finput" maxlength="4" placeholder="****"
+             autocomplete="off" autocapitalize="characters"
+             style="text-align:center;letter-spacing:8px;font-size:20px;font-weight:600">
+      <div class="adv-err" id="adv-err"></div>
+      <div class="adv-status">当前：${cur ? '紧凑班次 8-13 / 20-01' : '标准班次 8-20 / 20-08'}</div>
+      <div class="modal-btns" style="margin-top:14px">
+        <button class="btn gray" data-cancel>取消</button>
+        <button class="btn" data-ok>确定</button>
+      </div>
+    </div>`;
+    document.body.appendChild(mask);
+
+    const inp = mask.querySelector('#adv-input');
+    const err = mask.querySelector('#adv-err');
+    inp.focus();
+
+    function submit() {
+      const v = (inp.value || '').trim().toUpperCase();
+      if (!v) return;
+      if (v === ADV_CODE) {
+        API.setCompactShift(!API.isCompactShift());
+        const on = API.isCompactShift();
+        mask.remove();
+        toast(on ? '已切换：紧凑班次 8-13 / 20-01' : '已切换：标准班次 8-20 / 20-08');
+      } else {
+        err.textContent = '代码错误';
+        inp.value = '';
+        inp.focus();
+      }
+    }
+
+    mask.querySelector('[data-ok]').onclick = submit;
+    mask.querySelector('[data-cancel]').onclick = () => mask.remove();
+    inp.onkeydown = e => { if (e.key === 'Enter') submit(); };
+    mask.onclick = e => { if (e.target === mask) mask.remove(); };
+  }
 
   (async function init() {
     // 服务器地址固定，永远不展示
